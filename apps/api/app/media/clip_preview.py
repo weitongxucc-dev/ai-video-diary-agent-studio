@@ -3,6 +3,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from app.creation.clip_preview import CANDIDATE_CLIP_PREVIEW, CandidateClipPreviewCommand, ClipPreviewCommand
+from app.creation.editing.candidate_preview_audio import candidate_picture_publication
 from app.montage import MontageClip, render_granted_clip_preview
 
 
@@ -41,6 +42,13 @@ class ClipPreviewExecutor:
             kind = "speed_preview" if command.operation_type == "ChangeClipSpeed" else "color_preview"
         if facts != event["input_facts"] or resources != event["resources"]:
             raise ValueError("镜头预览封存输入或资源声明已变化")
+        if candidate and not resources["silent"]:
+            parameters, refs, media_input = candidate_picture_publication(facts)
+            record = self.use_case.candidate_picture_renderer().audio.publish(
+                job.workspace_id, job.task_id, kind=kind, suffix=".mp4", engine="local-montage-v20",
+                parameters=parameters, input_refs=refs, operation="picture_preview", media_input=media_input,
+                execution=(context, job, event, actor))
+            return {"candidate_artifact_id": record.id}
         records = []
         for side, clip in (("before", facts["clip"]), ("after", facts["candidates"][0])):
             context.check()
@@ -65,6 +73,9 @@ class ClipPreviewExecutor:
             records = self.use_case.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id)
             ids = {record.id for record in records
                    if record.producer_job_id == job.id and record.kind == CANDIDATE_CLIP_PREVIEW}
-            if len(ids) != 2 or ids != {result["baseline_artifact_id"], result["candidate_artifact_id"]}:
-                raise ValueError("候选短预览缺少原作业登记的两份画面")
+            expected = {result["candidate_artifact_id"]}
+            if event["resources"]["silent"]:
+                expected.add(result["baseline_artifact_id"])
+            if ids != expected or len(ids) != (2 if event["resources"]["silent"] else 1):
+                raise ValueError("候选短预览缺少原作业登记的产物")
         return self.publisher.validate_publications(job, event, result, context)

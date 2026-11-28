@@ -38,8 +38,8 @@ function previewStatus(preview: TimelineCandidatePreview) {
   switch (preview.status) {
     case "queued": return "等待生成短预览。";
     case "interrupted": return "预览已中断，等待恢复。";
-    case "running": return "正在生成镜头静音预览。";
-    case "succeeded": return `作品 ${preview.timeline_start_seconds.toFixed(2)}–${preview.timeline_end_seconds.toFixed(2)} 秒 · 原片 ${preview.source_start_seconds.toFixed(2)}–${preview.source_end_seconds.toFixed(2)} 秒`;
+    case "running": return "正在生成镜头预览。";
+    case "succeeded": return `作品 ${preview.timeline_start_seconds.toFixed(2)}–${preview.timeline_end_seconds.toFixed(2)} 秒 · 原片 ${preview.source_start_seconds.toFixed(2)}–${preview.source_end_seconds.toFixed(2)} 秒 · ${preview.silent ? "静音" : "含当前音轨"}`;
     case "cancelled": return "预览请求已取消。";
     case "stale": return "此预览已过期，请读取候选当前版本。";
     case "failed": return preview.failure_reason === "result_invalid" ? "原预览文件已失效。" : "短预览生成失败。";
@@ -74,7 +74,8 @@ function CandidateVideo({ side, preview, target }: {
   if (error) return <p className={styles.error} role="alert">{error}</p>;
   if (!source || source.jobId !== preview.job_id) return <p role="status">正在读取预览画面…</p>;
   return <WorkspaceVideo className={styles.video} src={source.url} width={preview.width_px} height={preview.height_px}
-    controls playsInline muted preload="none" aria-label={`候选 ${side} 的镜头静音预览`}
+    controls playsInline muted={preview.silent} preload="none"
+    aria-label={`候选 ${side} 的镜头${preview.silent ? "静音" : "有声"}预览`}
     onError={() => setError("无法播放此候选画面，请重新打开预览。")} />;
 }
 
@@ -172,15 +173,15 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
     }
   }
 
-  async function startPreview() {
+  async function startPreview(withAudio: boolean) {
     if (!detail || action || adopting) return;
-    const key = `preview:${detail.head_version_id}:${clipId}`;
+    const key = `preview:${detail.head_version_id}:${clipId}:${withAudio}`;
     const id = request.current?.key === key ? request.current.id : crypto.randomUUID();
     request.current = { key, id };
     setAction("preview");
     setError(null);
     try {
-      const result = await submitTimelineCandidatePreview(target, detail, clipId, id);
+      const result = await submitTimelineCandidatePreview(target, detail, clipId, id, withAudio);
       onVideo((active) => active === preview?.job_id ? null : active);
       setPreview(result);
       request.current = null;
@@ -290,10 +291,13 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
         <Button variant="outline" type="submit" disabled={action !== null || adopting || !dirty}>{action === "save" ? "正在保存…" : "保存候选裁切"}</Button>
       </form>
       <div className={styles.actions}>
-        {preview?.status !== "succeeded" && !pending(preview)
-          ? <Button type="button" disabled={action !== null || adopting || dirty || readingPreview} onClick={() => void startPreview()}>
-            {action === "preview" ? "正在提交…" : "生成静音预览"}
+        {(preview?.status !== "succeeded" || preview.silent) && !pending(preview)
+          ? <Button type="button" disabled={action !== null || adopting || dirty || readingPreview} onClick={() => void startPreview(true)}>
+            {action === "preview" ? "正在提交…" : "生成有声预览"}
           </Button> : null}
+        {preview?.status !== "succeeded" && !pending(preview)
+          ? <Button variant="outline" type="button" disabled={action !== null || adopting || dirty || readingPreview}
+            onClick={() => void startPreview(false)}>生成静音预览</Button> : null}
         {preview && pending(preview) ? <Button variant="outline" disabled={action !== null || adopting} onClick={() => void cancelPreview()}>取消预览请求</Button> : null}
         {preview?.status === "succeeded" ? <Button variant="outline" disabled={adopting} aria-expanded={openJobId === preview.job_id}
           onClick={() => onVideo(openJobId === preview.job_id ? null : preview.job_id)}>
@@ -379,7 +383,7 @@ export function TimelineCandidateComparison({ taskId, clipId, clipNumber, base, 
   }
 
   return <div className={styles.comparison}>
-    <p className={styles.meta}>镜头 {clipNumber} · 静音短预览，最多 5 秒</p>
+    <p className={styles.meta}>镜头 {clipNumber} · 最多预览 5 秒，仅比较镜头画面与该区间音轨。</p>
     {error ? <div role="alert" className={styles.error}>{error}{" "}
       <Button variant="ghost" onClick={() => { setError(null); setReload((value) => value + 1); }}>重新读取</Button>
     </div> : null}

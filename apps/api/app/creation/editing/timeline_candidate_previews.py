@@ -3,6 +3,8 @@ from contextlib import closing
 from dataclasses import asdict
 
 from app.creation.clip_preview import CANDIDATE_CLIP_PREVIEW, CandidateClipPreviewCommand, ClipPreviewConflict
+from app.creation.editing.candidate_preview_audio import candidate_picture_publication
+from app.creation.narration_duration import DELIVERY_FRAME_RATE
 from app.creation_execution import CreationExecutionActor
 from app.montage import MontageClip
 from app.visual_effects import clip_playback_rate
@@ -20,8 +22,11 @@ class TimelineCandidatePreviewUseCase:
             self.clip_preview.require_candidate_head(actor, task_id, command, connection=conn)
         runtime = runtime_for()
         media = runtime.registrations["creation_job"].owner.task_media
+        arguments = asdict(command)
+        if not command.with_audio:
+            del arguments["with_audio"]
         job = media.submit(runtime, actor, task_id, CANDIDATE_CLIP_PREVIEW, {
-            "candidate": asdict(command),
+            "candidate": arguments,
         }, CANDIDATE_CLIP_PREVIEW)
         return self.read(media, actor, task_id, command.candidate_id, command.version_id, job.id)
 
@@ -47,17 +52,25 @@ class TimelineCandidatePreviewUseCase:
         inputs = records.get_task_event(job.workspace_id, f"event_{job.id}_{record.id.removeprefix('artifact_')}_input",
             connection=connection)
         facts = event["input_facts"]
+        if event["resources"]["silent"]:
+            operation = "clip_preview"
+            refs = [f"timeline:{target.version_id}", facts["clip"]["source_path"]]
+            parameters = {"base_version_id": target.version_id, "side": "after",
+                "clip_id": target.clip_id, "max_seconds": 5, "silent": True,
+                "candidate_id": target.candidate_id, "formal_base_version_id": facts["formal_base_version_id"]}
+            media_input = {"clip": facts["candidates"][0], "source_path": facts["source_path"],
+                "aspect_ratio": facts["aspect_ratio"], "max_seconds": 5}
+        else:
+            operation = "picture_preview"
+            parameters, refs, media_input = candidate_picture_publication(facts)
         if (record.producer_job_id != job.id or record.kind != CANDIDATE_CLIP_PREVIEW or record.task_id != job.task_id
-                or record.input_refs != [f"timeline:{target.version_id}", facts["clip"]["source_path"]]
+                or record.input_refs != refs
                 or record.logical_ref not in job.output_refs
                 or not any(output["reference"] == record.logical_ref for output in verified)
                 or inputs.job_id != job.id or inputs.task_id != job.task_id
                 or inputs.event_type != "task_media_input"
-                or inputs.payload["parameters"] != {"base_version_id": target.version_id, "side": "after",
-                    "clip_id": target.clip_id, "max_seconds": 5, "silent": True,
-                    "candidate_id": target.candidate_id, "formal_base_version_id": facts["formal_base_version_id"]}
-                or inputs.payload["media_input"] != {"clip": facts["candidates"][0], "source_path": facts["source_path"],
-                    "aspect_ratio": facts["aspect_ratio"], "max_seconds": 5}):
+                or inputs.payload["operation"] != operation or inputs.payload["input_refs"] != refs
+                or inputs.payload["parameters"] != parameters or inputs.payload["media_input"] != media_input):
             raise ClipPreviewConflict("候选预览产物与原作业或版本不一致")
         publication = self.artifact_store.describe(record.logical_ref)
         if (publication.size_bytes, publication.sha256) != (record.size_bytes, record.sha256):
@@ -133,17 +146,23 @@ class TimelineCandidatePreviewUseCase:
                         job.workspace_id, job.task_id, job.id, waiting["id"])
                     if admission is not None and admission.payload.get("admission_reason") == "declared_resources_exceed_budget":
                         waiting_reason = "declared_resources_exceed_budget"
-        clip = MontageClip(**event["input_facts"]["candidates"][0])
-        duration = event["resources"]["duration_seconds"]
-        rate = clip_playback_rate(clip)
+        facts, resources = event["input_facts"], event["resources"]
+        if resources["silent"]:
+            clip = MontageClip(**facts["candidates"][0])
+            start = clip.timeline_start_seconds
+            end = start + resources["duration_seconds"]
+            source_end = min(clip.source_start_seconds + clip_playback_rate(clip) * 5, clip.source_end_seconds)
+        else:
+            clip = MontageClip(**facts["picture_input"]["plan"]["clips"][0])
+            start, end = (frame / DELIVERY_FRAME_RATE for frame in facts["window_frames"])
+            source_end = clip.source_end_seconds
         return {"job_id": job.id, "task_id": task_id, "candidate_id": candidate_id, "version_id": version_id,
-            "clip_id": clip.id, "status": status, "result_url": url, "video_url": video_url, "silent": True,
+            "clip_id": clip.id, "status": status, "result_url": url, "video_url": video_url, "silent": resources["silent"],
             "waiting_reason": waiting_reason, "failure_reason": failure_reason,
             "width_px": event["resources"]["width_px"], "height_px": event["resources"]["height_px"],
-            "timeline_start_seconds": clip.timeline_start_seconds,
-            "timeline_end_seconds": clip.timeline_start_seconds + duration,
+            "timeline_start_seconds": start, "timeline_end_seconds": end,
             "source_start_seconds": clip.source_start_seconds,
-            "source_end_seconds": min(clip.source_start_seconds + rate * 5, clip.source_end_seconds)}
+            "source_end_seconds": source_end}
 
     def video(self, media, actor, task_id, candidate_id, version_id, job_id):
         job, _event, target = self._bound_job(media, actor, task_id, candidate_id, version_id, job_id)

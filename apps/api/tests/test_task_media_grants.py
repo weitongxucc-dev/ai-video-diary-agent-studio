@@ -618,6 +618,56 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0, lock_first=True, so
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
 
 
+def test_audible_candidate_seals_only_the_selected_window_and_rechecks_audio(tmp_path, monkeypatch):
+    from uuid import uuid4
+
+    main, repo, _actor, media, runtime, client, original, _track, _store = _visual_scope_case(tmp_path, monkeypatch)
+    root = "/api/creation-tasks/task/timeline/candidates"
+    candidate = str(uuid4())
+    base = {"expected_timeline_version_id": "timeline", "expected_timeline_sequence": 1}
+    try:
+        assert client.post(root, json={**base, "candidate_id": candidate}).status_code == 200
+        edited = client.post(f"{root}/{candidate}/edits/exact", json={
+            **base, "request_id": str(uuid4()), "operation_type": "ChangeCrop",
+            "clip_id": "clip_1", "fit_mode": "fill", "crop_x": .35, "crop_y": .5,
+        })
+        assert edited.status_code == 200, edited.text
+        version = edited.json()["version"]
+        request = {"expected_timeline_version_id": version["id"], "expected_timeline_sequence": version["sequence"],
+            "request_id": str(uuid4()), "clip_id": "clip_1", "with_audio": True}
+        submitted = client.post(f"{root}/{candidate}/previews", json=request)
+        assert submitted.status_code == 202, submitted.text
+        receipt = submitted.json()
+        assert not receipt["silent"] and receipt["status"] == "queued"
+        assert (receipt["timeline_start_seconds"], receipt["timeline_end_seconds"]) == (1, 6)
+        assert client.post(f"{root}/{candidate}/previews", json=request).json() == receipt
+        assert client.post(f"{root}/{candidate}/previews", json={**request, "with_audio": False}).status_code == 409
+        _, event = media.read("local", receipt["job_id"])
+        facts, resources = event["input_facts"], event["resources"]
+        assert facts["window_frames"] == [30, 180]
+        assert resources["kind"] == "creation_render" and resources["duration_seconds"] == 5
+        assert resources["audio_mix"]["input_count"] == 1
+        plan = facts["picture_input"]["plan"]
+        shot, = plan["clips"]
+        assert (shot["crop_x"], shot["timeline_start_seconds"], shot["timeline_end_seconds"],
+                shot["source_end_seconds"], shot["transition_in_seconds"]) == (.35, 0, 5, 5, 0)
+        audio, = plan["audio_timeline"]["tracks"][0]["clips"]
+        assert (audio["source_start_ms"], audio["source_end_ms"], audio["timeline_start_ms"],
+                audio["envelope_offset_ms"], audio["envelope_duration_ms"]) == (1000, 6000, 0, 1000, 8000)
+        source, = facts["audio_sources"]
+        assert source["reference"] == audio["source_ref"]
+        assert plan["graphic_overlays"] == [] and facts["picture_input"]["subtitle_tracks"] == []
+        assert repo.get_creation_task_montage_plan("local", "task") == original
+        voice = repo.video_library_path / "voice.wav"
+        voice.write_bytes(voice.read_bytes() + b"\x00")
+        stale = client.get(receipt["result_url"])
+        assert stale.status_code == 200 and stale.json()["status"] == "stale"
+        assert stale.json()["video_url"] is None
+    finally:
+        runtime.stop(0)
+        client.close()
+
+
 def test_candidate_clip_preview_uses_separate_granted_outputs_and_rejects_public_jobs(tmp_path, monkeypatch):
     import json
     import subprocess

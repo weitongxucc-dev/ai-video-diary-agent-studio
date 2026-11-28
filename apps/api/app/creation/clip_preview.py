@@ -28,6 +28,7 @@ class CandidateClipPreviewTarget:
 @dataclass(frozen=True)
 class CandidateClipPreviewCommand(CandidateClipPreviewTarget):
     request_id: str
+    with_audio: bool = False
 
 
 class ClipPreviewUnavailable(ValueError):
@@ -37,10 +38,13 @@ class ClipPreviewUnavailable(ValueError):
 
 
 class ClipPreviewUseCase:
-    def __init__(self, repository, *, resolve_presenter_source, budget):
+    def __init__(self, repository, *, resolve_presenter_source, budget, candidate_picture_renderer=None,
+                 candidate_picture_budgets=None):
         self.repository = repository
         self.resolve_presenter_source = resolve_presenter_source
         self.budget = budget
+        self.candidate_picture_renderer = candidate_picture_renderer
+        self.candidate_picture_budgets = candidate_picture_budgets
 
     def prepare(self, actor, command):
         task = self.repository.task_records.get_creation_task(actor.workspace_id, command.task_id)
@@ -152,6 +156,12 @@ class ClipPreviewUseCase:
                 local_diagnostic=False, montage=montage, connection=conn)
             source = self.repository.resolve_clip_media_reference(
                 actor.workspace_id, clip.asset_id, clip.source_path, connection=conn)
+            if command.with_audio:
+                from app.creation.editing.candidate_preview_audio import seal_candidate_picture
+                facts, resources = seal_candidate_picture(self, task, actor, plan, clip, source, connection=conn)
+                facts.update(base_version_id=version.id, candidate_id=candidate.id,
+                    formal_base_version_id=baseline.id, source_facts=source_facts)
+                return facts, resources
             facts, resources = self._seal_pair(actor, task, version, plan, [before], [clip], source=source)
         facts.update(candidate_id=candidate.id, formal_base_version_id=baseline.id, source_facts=source_facts)
         return facts, resources

@@ -62,7 +62,7 @@ export type TimelineCandidatePreview = {
   status: "queued" | "running" | "interrupted" | "succeeded" | "failed" | "cancelled" | "stale";
   result_url: string;
   video_url: string | null;
-  silent: true;
+  silent: boolean;
   width_px: number;
   height_px: number;
   timeline_start_seconds: number;
@@ -147,7 +147,7 @@ function requirePreview(
   const path = candidatePreviewPath(target, versionId, jobId);
   if (preview.task_id !== target.taskId || preview.candidate_id !== target.candidateId
       || preview.version_id !== versionId || preview.clip_id !== clipId
-      || preview.job_id !== jobId || preview.silent !== true || preview.result_url !== path
+      || preview.job_id !== jobId || typeof preview.silent !== "boolean" || preview.result_url !== path
       || preview.video_url !== (preview.status === "succeeded" ? `${path}/video` : null)) {
     throw new Error("预览回执与所选候选、版本或镜头不一致。");
   }
@@ -228,6 +228,7 @@ export async function saveTimelineCandidateCrop(
 
 export async function submitTimelineCandidatePreview(
   target: TimelineCandidateTarget, candidate: TimelineCandidateDetail, clipId: string, requestId: string,
+  withAudio = true,
 ) {
   requireTarget(target, candidate);
   const version = candidate.version;
@@ -241,6 +242,7 @@ export async function submitTimelineCandidatePreview(
       clip_id: clipId,
       expected_timeline_version_id: version.id,
       expected_timeline_sequence: version.sequence,
+      ...(withAudio ? { with_audio: true } : {}),
     }),
   });
   requirePreview(target, version.id, clipId, preview, preview.job_id);
@@ -255,6 +257,7 @@ export async function readTimelineCandidatePreview(
     candidatePreviewPath(target, original.version_id, original.job_id), { signal },
   );
   requirePreview(target, original.version_id, original.clip_id, preview, original.job_id);
+  if (preview.silent !== original.silent) throw new Error("原预览的声音状态无法核对。");
   return preview;
 }
 
@@ -273,6 +276,7 @@ export async function cancelTimelineCandidatePreview(target: TimelineCandidateTa
   requirePreview(target, original.version_id, original.clip_id, original, original.job_id);
   const preview = await creationPlanRequest<TimelineCandidatePreview>(`${original.result_url}/cancel`, { method: "POST" });
   requirePreview(target, original.version_id, original.clip_id, preview, original.job_id);
+  if (preview.silent !== original.silent) throw new Error("原预览的声音状态无法核对。");
   return preview;
 }
 
