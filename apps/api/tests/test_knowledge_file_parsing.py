@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.knowledge_files import KnowledgeFileError, parse_knowledge_file
+from app.knowledge_files import KnowledgeFileError, PdfParseLimits, parse_knowledge_file
 from app.local_members import LocalMemberService
 from app.source_repository import SourceRepository
 from tests.pdf_fixture import _text_pdf
@@ -134,6 +134,65 @@ def test_pdf_import_uses_real_page_locators(client):
     detail = client.get(f"/api/knowledge-items/{saved['id']}").json()
     assert [version["version"] for version in detail["versions"]] == ["1"]
     assert [section["locator"] for section in detail["versions"][0]["sections"]] == ["第1页", "第2页"]
+
+
+def test_private_pdf_diagnostics_are_scoped_to_the_attachment_parse(caplog, monkeypatch):
+    import io
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from pypdf import PageObject, PdfWriter
+    from pypdf.generic import DecodedStreamObject, NameObject
+
+    def broken_page(name):
+        writer = PdfWriter(clone_from=io.BytesIO(_text_pdf(["Visible fixture body"])))
+        page = writer.pages[0]
+        contents = DecodedStreamObject()
+        contents.set_data(page.get_contents().get_data() + f"\n/{name} Do".encode())
+        page[NameObject("/Contents")] = writer._add_object(contents)
+        output = io.BytesIO()
+        writer.write(output)
+        return output.getvalue()
+
+    limits = PdfParseLimits(24, 16 * 1024)
+    with pytest.raises(KnowledgeFileError, match="无法完整解析") as failure:
+        parse_knowledge_file("private.pdf", b"QASECRET header", pdf_limits=limits)
+    assert failure.value.__suppress_context__ and "QASECRET" not in str(failure.value)
+    assert "QASECRET" not in caplog.text
+
+    legacy_pdf = broken_page("LegacyQaObject")
+    private_pdf = broken_page("PrivateQaObject")
+    ready = Barrier(2, timeout=5)
+    extract_text = PageObject.extract_text
+
+    def extract_in_parallel(page):
+        ready.wait()
+        return extract_text(page)
+
+    monkeypatch.setattr(PageObject, "extract_text", extract_in_parallel)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        private = pool.submit(parse_knowledge_file, "private.pdf", private_pdf, pdf_limits=limits)
+        legacy = pool.submit(parse_knowledge_file, "library.pdf", legacy_pdf)
+        with pytest.raises(KnowledgeFileError, match="无法可靠解析"):
+            private.result()
+        assert legacy.result().full_text == "Visible fixture body"
+    assert "LegacyQaObject" in caplog.text
+    assert "PrivateQaObject" not in caplog.text and "Visible fixture body" not in caplog.text
+
+
+def test_attachment_pdf_limits_pages_before_extraction_and_bounds_total_text(monkeypatch):
+    from pypdf import PageObject
+
+    two_pages = _text_pdf(["First page", "Second page"])
+    with monkeypatch.context() as patch:
+        def unexpected_extract(_page):
+            pytest.fail("page limit must be checked before text extraction")
+
+        patch.setattr(PageObject, "extract_text", unexpected_extract)
+        with pytest.raises(KnowledgeFileError, match="最多支持 1 页"):
+            parse_knowledge_file("manual.pdf", two_pages, pdf_limits=PdfParseLimits(1, 16 * 1024))
+    with pytest.raises(KnowledgeFileError, match="正文过长"):
+        parse_knowledge_file("manual.pdf", two_pages, pdf_limits=PdfParseLimits(2, 15))
 
 
 def test_pdf_without_text_layer_fails_and_writes_nothing(client):

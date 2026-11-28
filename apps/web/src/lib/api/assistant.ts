@@ -88,6 +88,34 @@ export async function getAssistantCapabilities(): Promise<AssistantCapabilities>
 export function getAssistantConversationReference(conversationId: string): Promise<import("../types").AssistantConversationReferenceState> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/reference`);
 }
+
+export async function attachAssistantTurnPdf(conversationId: string, file: File, expectedReferenceVersion: number) {
+    if (file.size === 0 || file.size > 2 * 1024 * 1024 || !/\.pdf$/i.test(file.name)) {
+        throw new Error("请选择非空的 PDF 文件，大小不超过 2 MiB。");
+    }
+    const contentBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1]);
+        reader.onerror = () => reject(new Error("无法读取所选 PDF，请重新选择。"));
+        reader.readAsDataURL(file);
+    });
+    return creationPlanRequest<import("../types").AssistantConversationReferenceState>(
+        `/api/assistant/conversations/${encodeURIComponent(conversationId)}/turn-pdf`, {
+            method: "POST",
+            body: JSON.stringify({
+                filename: file.name, content_base64: contentBase64,
+                expected_reference_version: expectedReferenceVersion,
+            }),
+        });
+}
+
+export function getAssistantTurnPdf(conversationId: string, attachmentId: string, turnId?: string, signal?: AbortSignal) {
+    const query = turnId ? `?turn_id=${encodeURIComponent(turnId)}` : "";
+    return creationPlanRequest<{pages: {locator: string; text: string}[]}>(
+        `/api/assistant/conversations/${encodeURIComponent(conversationId)}/turn-pdf/${encodeURIComponent(attachmentId)}${query}`,
+        { signal, cache: "no-store" },
+    );
+}
 export function saveAssistantConversationReference(conversationId: string, selectedReference: import("../types").AssistantSavedReference | null, expectedReferenceVersion: number): Promise<import("../types").AssistantConversationReferenceState> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/reference`, {
         method: "PATCH", body: JSON.stringify({ selected_reference: selectedReference, expected_reference_version: expectedReferenceVersion }),

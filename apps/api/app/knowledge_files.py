@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import re
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 MARKDOWN_SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 PDF_SUFFIXES = frozenset({".pdf"})
@@ -21,6 +25,49 @@ SUPPORTED_SUFFIXES = MARKDOWN_SUFFIXES | PDF_SUFFIXES | WORD_SUFFIXES | EXCEL_SU
 
 class KnowledgeFileError(ValueError):
     """文件无法解析为可核对正文时抛出，调用方必须显式失败。"""
+
+
+@dataclass(frozen=True)
+class PdfParseLimits:
+    pages: int
+    text_bytes: int
+
+
+@dataclass
+class _PdfDiagnostics:
+    had_warning: bool = False
+
+
+_pdf_diagnostics = ContextVar[_PdfDiagnostics | None]("private_pdf_diagnostics", default=None)
+_pdf_logging_setup = Lock()
+
+
+class _PdfLogRecords:
+    """Redact at record creation, including every pypdf child logger."""
+
+    def __init__(self, downstream):
+        self._downstream = downstream
+
+    def __call__(self, name, level, pathname, lineno, msg, args, exc_info, *rest, **kwargs):
+        diagnostics = _pdf_diagnostics.get()
+        if diagnostics is not None and name and (name == "pypdf" or name.startswith("pypdf.")):
+            diagnostics.had_warning |= level >= logging.WARNING
+            msg, args, exc_info = "本轮 PDF 的原始解析诊断已隐藏。", (), None
+        return self._downstream(name, level, pathname, lineno, msg, args, exc_info, *rest, **kwargs)
+
+
+@contextmanager
+def _private_pdf_diagnostics():
+    with _pdf_logging_setup:
+        factory = logging.getLogRecordFactory()
+        if not isinstance(factory, _PdfLogRecords):
+            logging.setLogRecordFactory(_PdfLogRecords(factory))
+    diagnostics = _PdfDiagnostics()
+    token = _pdf_diagnostics.set(diagnostics)
+    try:
+        yield diagnostics
+    finally:
+        _pdf_diagnostics.reset(token)
 
 
 @dataclass(frozen=True)
@@ -49,12 +96,12 @@ class ParsedKnowledgeFile:
     parameters: tuple[KnowledgeParameter, ...] = field(default_factory=tuple)
 
 
-def parse_knowledge_file(filename: str, data: bytes) -> ParsedKnowledgeFile:
+def parse_knowledge_file(filename: str, data: bytes, *, pdf_limits: PdfParseLimits | None = None) -> ParsedKnowledgeFile:
     suffix = Path(filename).suffix.lower()
     if suffix in MARKDOWN_SUFFIXES:
         return _parse_markdown(filename, data)
     if suffix in PDF_SUFFIXES:
-        return _parse_pdf(filename, data)
+        return _parse_pdf(filename, data, limits=pdf_limits)
     if suffix in WORD_SUFFIXES:
         from app.knowledge_parsers.word import parse_docx
         return parse_docx(filename, data)
@@ -172,30 +219,48 @@ def _pdf_page_has_unread_content(page) -> bool:
     return False
 
 
-def _parse_pdf(filename: str, data: bytes) -> ParsedKnowledgeFile:
+def _parse_pdf(filename: str, data: bytes, *, limits: PdfParseLimits | None) -> ParsedKnowledgeFile:
     from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
+    from pypdf.errors import DependencyError, PdfReadError, PyPdfError
 
+    pages = []
+    missing_pages = []
+    text_bytes = 0
     try:
-        reader = PdfReader(io.BytesIO(data))
-        pages = [(page.extract_text() or "") for page in reader.pages]
-        missing_pages = [str(number) for number, (page, text) in enumerate(zip(reader.pages, pages), start=1)
-                         if not text.strip() and _pdf_page_has_unread_content(page)]
-    except PdfReadError as exc:
+        diagnostics_context = _private_pdf_diagnostics() if limits else nullcontext()
+        with diagnostics_context as diagnostics:
+            reader = PdfReader(io.BytesIO(data), strict=limits is not None)
+            if limits and len(reader.pages) > limits.pages:
+                raise KnowledgeFileError(f"本轮 PDF 最多支持 {limits.pages} 页，请先选取所需页面。")
+            for number, page in enumerate(reader.pages, start=1):
+                text = (page.extract_text() or "").strip()
+                if limits:
+                    text_bytes += len(text.encode("utf-8")) + (2 if pages else 0)
+                    if text_bytes > limits.text_bytes:
+                        raise KnowledgeFileError("本轮 PDF 的可提取正文过长，请先选取所需页面。")
+                if not text and _pdf_page_has_unread_content(page):
+                    missing_pages.append(str(number))
+                pages.append(text)
+            if diagnostics and diagnostics.had_warning:
+                raise KnowledgeFileError("PDF 包含无法可靠解析的内容，请重新选择。")
+    except KnowledgeFileError:
+        raise
+    except (PyPdfError, DependencyError, RecursionError, ValueError, TypeError, AttributeError, KeyError, IndexError, OverflowError) as exc:
+        if limits:
+            raise KnowledgeFileError("PDF 无法完整解析，请检查文件后重新选择。") from None
+        if not isinstance(exc, PdfReadError):
+            raise
         raise KnowledgeFileError(f"{filename} 不是可解析的 PDF：{exc}") from exc
     if missing_pages:
         raise KnowledgeFileError(
             f"{filename} 第{'、'.join(missing_pages)}页没有可提取的文本层；"
             "当前未接通 OCR，未导入整份资料。请核对这些页面或提供文本版本"
         )
-    if not pages or not any(page.strip() for page in pages):
+    if not any(pages):
         raise KnowledgeFileError(f"{filename} 没有可用的正文内容")
     sections: list[KnowledgeSection] = []
     parameters: list[KnowledgeParameter] = []
-    full_pages: list[str] = []
-    for number, page_text in enumerate(pages, start=1):
-        text = page_text.strip()
-        full_pages.append(text)
+    for number, text in enumerate(pages, start=1):
         locator = f"第{number}页"
         sections.append(KnowledgeSection(locator=locator, title=locator, text=text))
         parameters.extend(_parameters_from_text(locator, text))
@@ -204,7 +269,7 @@ def _parse_pdf(filename: str, data: bytes) -> ParsedKnowledgeFile:
         content_type="application/pdf",
         content_hash=_content_hash(data),
         title=Path(filename).stem,
-        full_text="\n\n".join(full_pages),
+        full_text="\n\n".join(pages),
         sections=tuple(sections),
         parameters=tuple(parameters),
     )

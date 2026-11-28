@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useState } from "react";
-const api=vi.hoisted(()=>({read:vi.fn(),select:vi.fn()}));
+const api=vi.hoisted(()=>({read:vi.fn(),select:vi.fn(),attachPdf:vi.fn()}));
 vi.mock("@/lib/api/materials",()=>({getProductionMaterials:api.read}));
-vi.mock("../AssistantConversationProvider",()=>({useAssistantSelection:()=>({items:[],select:api.select})}));
+vi.mock("../AssistantConversationProvider",()=>({
+  useAssistantSelection:()=>({items:[],select:api.select,attachPdf:api.attachPdf}),
+  useAssistantReferenceStatus:()=>({pending:false,reason:null}),
+}));
 import { ReferencePicker } from "../ui/reference-picker";
 const asset={id:"visible-material",file_name:"现场分享.mp4",media_type:"video",updated_at:"fixed-source-version"};
 function Picker(){const[open,setOpen]=useState(false);return <ReferencePicker open={open} onOpenChange={setOpen} onAdded={()=>{}}/>;}
@@ -27,5 +30,20 @@ it("keeps a failed library read distinct from an empty search",async()=>{
   fireEvent.click(screen.getByRole("button",{name:"添加素材引用"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("素材服务不可读取");
   expect(screen.queryByText("没有找到素材。")).not.toBeInTheDocument();
+  expect(api.select).not.toHaveBeenCalled();
+});
+
+it("retries the same local PDF through the draft attachment action", async () => {
+  api.attachPdf.mockRejectedValueOnce(new Error("附件服务暂不可用")).mockResolvedValueOnce(undefined);
+  render(<Picker/>);
+  fireEvent.click(screen.getByRole("button", {name:"添加素材引用"}));
+  const add = await screen.findByRole("button", {name:"添加本地 PDF · 仅本轮使用"});
+  const file = new File(["%PDF fixture"], "manual.pdf", {type:"application/pdf"});
+  const input = add.parentElement?.querySelector("input[type=file]") as HTMLInputElement;
+  fireEvent.change(input, {target:{files:[file]}});
+  expect(await screen.findByRole("alert")).toHaveTextContent("附件服务暂不可用");
+  fireEvent.click(screen.getByRole("button", {name:"重试 PDF 上传"}));
+  await waitFor(() => expect(screen.queryByText("附件服务暂不可用")).not.toBeInTheDocument());
+  expect(api.attachPdf.mock.calls).toEqual([[file], [file]]);
   expect(api.select).not.toHaveBeenCalled();
 });

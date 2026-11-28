@@ -321,9 +321,11 @@ class ConversationRepository:
         return self._conversation(updated)
 
     def save_reference(self, conversation_id: str, workspace_id: str, member_id: str,
-                       reference: dict | None, expected_reference_version: int) -> dict | None:
+                       reference: dict | None, expected_reference_version: int, *,
+                       new_turn_pdf: tuple[dict, bytes] | None = None) -> dict | None:
         from app.assistant.references import normalize_selection
-        reference = normalize_selection(reference)
+        from app.assistant.turn_pdf import PDF_KIND, TurnPdfStore, pdf_reference, reference_items, without_pdf
+
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM assistant_conversations WHERE id=? AND workspace_id=? AND member_id=?", (conversation_id, workspace_id, member_id)).fetchone()
@@ -331,6 +333,23 @@ class ConversationRepository:
                 return None
             if row["reference_version"] != expected_reference_version:
                 raise ConversationReferenceVersionConflict("引用已在其他位置更新，请重新读取这段对话后选择或取消；没有覆盖较新引用。")
+            current = self._conversation(row)["selected_reference"]
+            if new_turn_pdf is not None:
+                if row["scope_kind"] != "home" or conn.execute(
+                    "SELECT 1 FROM assistant_conversation_turns WHERE conversation_id=? LIMIT 1", (conversation_id,)
+                ).fetchone():
+                    raise ConversationReferenceVersionConflict("本地 PDF 只能添加到新创作对话的第一轮。")
+                items = reference_items(without_pdf(current))
+                if len(items) >= 32:
+                    raise ConversationReferenceVersionConflict("本轮引用已满，请先移除一项引用。")
+                attachment, data = new_turn_pdf
+                TurnPdfStore(self.database_path).put(workspace_id, member_id, conversation_id, attachment, data)
+                reference = {"kind": "selection", "items": [*items, attachment]}
+            else:
+                attachments = [item for item in reference_items(reference) if item["kind"] == PDF_KIND]
+                if attachments and attachments != [pdf_reference(current)]:
+                    raise ConversationReferenceVersionConflict("PDF 必须通过当前草稿的附件入口添加。")
+            reference = normalize_selection(reference)
             conn.execute("UPDATE assistant_conversations SET selected_reference_json=?, reference_version=reference_version+1, updated_at=? WHERE id=? AND workspace_id=? AND member_id=?",
                          (json.dumps(reference,ensure_ascii=False) if reference is not None else None,_now(),conversation_id,workspace_id,member_id))
             saved = conn.execute("SELECT * FROM assistant_conversations WHERE id=?", (conversation_id,)).fetchone()
@@ -765,6 +784,8 @@ class ConversationRepository:
         The boolean is true only for the call that inserted the durable turn; a replay
         must return the existing turn without launching its business tools again.
         """
+        from app.assistant.turn_pdf import pdf_reference, without_pdf
+
         self._validate_draft_request(client_request_id, expected_draft_version)
         context_json = json.dumps(request_context or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         with self._connect() as conn:
@@ -818,7 +839,8 @@ class ConversationRepository:
                     raise ConversationReferenceVersionConflict("引用已变化，本轮没有发送，请检查后重新发送。")
                 if (request_context or {}).get("selected_reference") != current["selected_reference"]:
                     raise ConversationReferenceVersionConflict("已核验引用与保存引用不一致，本轮没有发送。")
-            elif (request_context or {}).get("selected_reference") is not None:
+            elif ((request_context or {}).get("selected_reference") is not None
+                  or pdf_reference(current["selected_reference"]) is not None):
                 raise ConversationReferenceVersionConflict("发送引用需要明确引用版本，本轮没有发送。")
             if current["draft_version"] != expected_draft_version:
                 raise ConversationDraftVersionConflict(current)
@@ -830,11 +852,17 @@ class ConversationRepository:
             ).fetchone()
             if running is not None:
                 raise ConversationTurnAlreadyRunning("此对话已有正在运行的助手轮次。")
+            attachment = pdf_reference(current["selected_reference"])
+            if attachment is not None and (conversation["scope_kind"] != "home"
+                    or (request_context or {}).get("kind") != "home"):
+                raise ConversationReferenceVersionConflict("本地 PDF 只能随新创作对话的第一轮发送。")
             self._invalidate_conversation_goals(conn, conversation_id, "new_user_instruction")
             sequence_row = conn.execute(
                 "SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM assistant_conversation_turns WHERE conversation_id=?",
                 (conversation_id,),
             ).fetchone()
+            if attachment is not None and int(sequence_row["sequence"]) != 1:
+                raise ConversationReferenceVersionConflict("本地 PDF 只能随新创作对话的第一轮发送。")
             turn_id = str(uuid4())
             now = _now()
             conn.execute(
@@ -856,6 +884,14 @@ class ConversationRepository:
                 if row is None:
                     return None, False
                 raise ConversationDraftVersionConflict(self._conversation(row))
+            if attachment is not None:
+                remaining = without_pdf(current["selected_reference"])
+                conn.execute(
+                    "UPDATE assistant_conversations SET selected_reference_json=?, reference_version=reference_version+1 "
+                    "WHERE id=? AND workspace_id=? AND member_id=?",
+                    (json.dumps(remaining, ensure_ascii=False) if remaining else None,
+                     conversation_id, workspace_id, member_id),
+                )
             conn.execute(
                 "INSERT INTO assistant_conversation_request_receipts "
                 "(client_request_id,conversation_id,workspace_id,member_id,scope_kind,scope_id,user_message,"
@@ -2379,6 +2415,21 @@ class ConversationRepository:
         return [{**dict(row), "events": json.loads(row["events_json"]),
                  "result": json.loads(row["result_json"]) if row["result_json"] else None}
                 for row in rows]
+
+    def turn_pdf_sources(self, conversation_id: str, workspace_id: str, member_id: str) -> dict:
+        from app.assistant.turn_pdf import pdf_reference
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT t.id, r.request_context_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id AND r.conversation_id=t.conversation_id "
+                "WHERE t.conversation_id=? AND t.sequence=1 AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
+                (conversation_id, workspace_id, member_id),
+            ).fetchone()
+        if row is None:
+            return {}
+        attachment = pdf_reference(json.loads(row["request_context_json"]).get("selected_reference"))
+        return {row["id"]: attachment} if attachment else {}
 
 
     def consumed_turn_request_context(self, turn_id, conversation_id, workspace_id, member_id):

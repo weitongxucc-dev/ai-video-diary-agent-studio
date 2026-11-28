@@ -9,15 +9,16 @@ import { ReferencePreview } from "./reference-preview";
 import { compactObjectName } from "@/lib/object-display-name";
 import { MaterialUsage, type MaterialUsageContext } from "./material-usage";
 import { Popover, PopoverContent, PopoverTrigger, PopoverTitle, PopoverClose } from "./popover";
+import { TurnPdfPreview } from "./turn-pdf-preview";
 
-const labels = { shot: "镜头", narration: "配音", audio: "音轨", subtitle: "字幕", effect: "效果", material: "素材", person: "人物", voice: "声音", knowledge: "资料" };
-const icons = { shot: Clapperboard, narration: AudioLines, audio: AudioLines, subtitle: Captions, effect: Sparkles, material: Film, person: UserRound, voice: AudioLines, knowledge: FileText };
+const labels = { shot: "镜头", narration: "配音", audio: "音轨", subtitle: "字幕", effect: "效果", material: "素材", person: "人物", voice: "声音", knowledge: "资料", turn_pdf: "PDF" };
+const icons = { shot: Clapperboard, narration: AudioLines, audio: AudioLines, subtitle: Captions, effect: Sparkles, material: Film, person: UserRound, voice: AudioLines, knowledge: FileText, turn_pdf: FileText };
 function time(ms: number) {
   const seconds = (ms % 60000 / 1000).toFixed(3).padStart(6, "0").replace(/\.?0+$/, "");
   return `${Math.floor(ms / 60000).toString().padStart(2, "0")}:${seconds}`;
 }
 
-export function ReferenceChips({ items, onRemove, usage }: { items: SelectedAssistantReference[]; onRemove: (item: SelectedAssistantReference)=>void; usage?: MaterialUsageContext }) {
+export function ReferenceChips({ items, onRemove, usage, conversationId, removalDisabled }: { items: SelectedAssistantReference[]; onRemove: (item: SelectedAssistantReference)=>void; usage?: MaterialUsageContext; conversationId?: string; removalDisabled?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { if (!items.length) setExpanded(false); }, [items.length]);
   if (!items.length) return null;
@@ -25,11 +26,11 @@ export function ReferenceChips({ items, onRemove, usage }: { items: SelectedAssi
     <div className="assistant-reference-attached">{items.slice(0, 3).map(item => {
       const Icon = icons[item.kind];
       return <div className="assistant-reference-capsule" key={assistantReferenceKey(item)}>
-        <Button variant="ghost" className="assistant-reference-open" title={`查看${labels[item.kind]}：${item.label}`} aria-label={`查看${labels[item.kind]}：${item.label}`} onClick={() => locateAssistantReference(item)}>
+        {item.kind === "turn_pdf" ? conversationId && <TurnPdfPreview attachment={item} conversationId={conversationId}/> : <Button variant="ghost" className="assistant-reference-open" title={`查看${labels[item.kind]}：${item.label}`} aria-label={`查看${labels[item.kind]}：${item.label}`} onClick={() => locateAssistantReference(item)}>
           {item.kind === "material" ? <ReferencePreview assetId={item.selection.asset_id}/> : <Icon size={16} aria-hidden/>}<span>{compactObjectName(item.label)}</span>
-        </Button>
+        </Button>}
         <MaterialUsage reference={item} context={usage}/>
-        <Button variant="ghost" size="icon" aria-label={`移除引用：${item.label}`} title="移除引用" onClick={()=>onRemove(item)}><X size={12}/></Button>
+        <Button variant="ghost" size="icon" disabled={removalDisabled} aria-label={`移除引用：${item.label}`} title="移除引用" onClick={()=>onRemove(item)}><X size={12}/></Button>
       </div>;
     })}</div>
     <Popover open={expanded} onOpenChange={setExpanded}>
@@ -47,8 +48,8 @@ export function ReferenceChips({ items, onRemove, usage }: { items: SelectedAssi
       const scope = item.kind === "material" ? item.selection.scope === "segment" ? " · 源片段" : " · 整条素材" : "";
       const name = `${labels[item.kind]} · ${item.label}${scope}${locator}${range}${version}`;
       return <li className="assistant-reference-item" key={assistantReferenceKey(item)}>
-        <Button variant="ghost" className="assistant-reference-locate" title={name} aria-label={`定位${name}`} onClick={()=>{ setExpanded(false); locateAssistantReference(item); }}><Icon size={16} aria-hidden/><span>{item.label}<small>{labels[item.kind]}{scope}{locator}{range}{version}</small></span></Button>
-        <Button variant="ghost" size="icon" aria-label={`取消${labels[item.kind]}引用：${item.label}${locator}${range}`} title="移除引用" onClick={()=>onRemove(item)}><X size={16} aria-hidden/></Button>
+        {item.kind === "turn_pdf" ? conversationId && <TurnPdfPreview attachment={item} conversationId={conversationId}/> : <Button variant="ghost" className="assistant-reference-locate" title={name} aria-label={`定位${name}`} onClick={()=>{ setExpanded(false); locateAssistantReference(item); }}><Icon size={16} aria-hidden/><span>{item.label}<small>{labels[item.kind]}{scope}{locator}{range}{version}</small></span></Button>}
+        <Button variant="ghost" size="icon" disabled={removalDisabled} aria-label={`取消${labels[item.kind]}引用：${item.label}${locator}${range}`} title="移除引用" onClick={()=>onRemove(item)}><X size={16} aria-hidden/></Button>
       </li>;
     })}</ul>
       </PopoverContent>
