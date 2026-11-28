@@ -2916,6 +2916,31 @@ describe("CreationTaskWorkspace", () => {
     expect(updatedReview.queryByText(/151 秒|162\.733 秒|162\.72 秒|已按旁白时长调整目标/)).not.toBeInTheDocument();
   });
 
+  it.each([
+    { status: "mismatch", target_range_seconds: null, timeline_seconds: 31.5 },
+    { status: "aligned", target_range_seconds: [29, 31], timeline_seconds: 30.5 },
+  ])("shows the current timeline duration and agreement when $status", async ({ status, target_range_seconds, timeline_seconds }) => {
+    const initial = workspaceWithCover();
+    initial.plan.duration_target_seconds = 30;
+    initial.montage!.duration_seconds = timeline_seconds;
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue({ ...queueStatus(null), video_ready: true, duration_consistency: {
+      status, original_target_seconds: null, target_seconds: 30, target_range_seconds, timeline_seconds,
+      timeline_version_id: initial.task.current_timeline_version_id, target_adjusted: false, adjustment_event_id: null,
+    } });
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    const review = within(await screen.findByRole("tabpanel", { name: "成片检查" }));
+    const detail = await review.findByText(/当前目标：30 秒/);
+    expect(detail).toHaveTextContent(`时间线时长：${timeline_seconds} 秒`);
+    expect(detail).toHaveTextContent("成片视频时长未测量");
+    if (status === "mismatch") {
+      expect(detail).toHaveTextContent("时间线时长未满足交付约定");
+    } else {
+      expect(detail).toHaveTextContent("约定范围：29 秒–31 秒");
+      expect(detail).not.toHaveTextContent("时间线时长未满足交付约定");
+    }
+  });
+
   it("binds the displayed timeline version to the native save boundary", async () => {
     const task = { ...baseTask, stage: "review" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 90, output_ready: true, current_timeline_version_id: "timeline-version-save" };
     const initial = workspace(task, {
