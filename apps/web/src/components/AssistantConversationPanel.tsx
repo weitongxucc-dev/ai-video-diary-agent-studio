@@ -655,6 +655,7 @@ export function AssistantConversationPanel({
 }) {
   const referenceStatus = useAssistantReferenceStatus();
   const selection = useAssistantSelection();
+  const referenceCount = selection?.items.length ?? 0;
   const staleTimelineReference = materialUsage && selection?.items.some(item =>
     "task_id" in item && item.task_id === materialUsage.taskId && item.version !== materialUsage.versionId);
   const [inputMode,setInputMode]=useState<"steer"|"follow_up">("steer");
@@ -1012,7 +1013,20 @@ export function AssistantConversationPanel({
     </div>
     {showJumpToLatest && turns.length ? <Button variant="ghost" className="assistant-jump-latest" type="button" aria-label="回到最新回复" title="回到最新回复" onClick={() => { const node = historyRef.current; if (!node || !conversation) return; node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight); followBottom.current = true; state.historyFollowBottom?.current.set(conversation.id, true); state.historyScrollPositions?.current.set(conversation.id, node.scrollTop); setShowJumpToLatest(false); node.focus({preventScroll:true}); }}><ArrowDown size={16} aria-hidden="true"/></Button> : null}
     </div>
-    {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
+    {referenceStatus.reason ? <div role="alert">
+      {referenceCount > 1
+        ? <p>引用核验未通过。请打开下方的本轮引用列表，逐项重新选择或移除。</p>
+        : referenceCount === 1
+          ? <p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p>
+          : <p>暂时无法确认引用是否已保存。请重新核对引用。</p>}
+      {referenceCount === 1 && !state.loading && !referenceStatus.pending
+        ? <Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button>
+        : null}
+      {referenceCount === 0 && referenceStatus.readAgain && !state.loading && !referenceStatus.pending
+        ? <Button variant="ghost" type="button" onClick={referenceStatus.readAgain}>重新核对引用</Button>
+        : null}
+      <details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details>
+    </div> : null}
     {staleTimelineReference ? <p className="assistant-stream-status" role="status">引用来自较早的作品版本。请移除或重新引用后发送。</p> : null}
     {pendingInputs.length ? <section className="assistant-pending-inputs" aria-label="待处理追加要求">{pendingInputs.map(({ item }) => <InputReceipt key={item.input_id} item={item} reading={reading} onWithdraw={id => void state.withdrawInput(id).catch(cause => setError(cause.message))}/>)}</section> : null}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">

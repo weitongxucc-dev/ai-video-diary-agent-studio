@@ -2174,6 +2174,65 @@ describe("AssistantConversationPanel", () => {
 
 
 describe("persistent workbench conversation and command completion", () => {
+  it("keeps the valid reference when recovering a draft with one expired item", async () => {
+    const saved = conversation();
+    const manual = { kind: "knowledge" as const, knowledge_item_id: "manual", version: "1", locator: "第3页", label: "固定版说明书" };
+    const segment = { kind: "material" as const, label: "原片 6–12 秒",
+      selection: { scope: "segment" as const, asset_id: "source", segment_id: "segment", expected_updated_at: "2026-10-09T00:00:00Z" } };
+    api.getCurrentAssistantConversation.mockResolvedValue(saved);
+    api.listAssistantConversations.mockResolvedValue({ items: [saved] });
+    api.getAssistantConversationReference.mockResolvedValue({
+      selected_reference: { kind: "selection", items: [segment, manual] },
+      reference_version: 2, status: "unavailable", reason: "素材记录已经变化",
+    });
+    render(<AssistantConversationProvider><AssistantConversationPanel state={state()} input="使用说明书和片段制作短片"
+      onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="工作区"/></AssistantConversationProvider>);
+
+    expect(await screen.findByText(/逐项重新选择或移除/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "清除不可用引用" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看本轮 2 项引用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消素材引用：原片 6–12 秒" }));
+
+    await waitFor(() => expect(api.saveAssistantConversationReference).toHaveBeenCalledWith(
+      saved.id, { kind: "selection", items: [manual] }, 2,
+    ));
+    expect(screen.getByRole("button", { name: "查看资料：固定版说明书" })).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue("使用说明书和片段制作短片");
+  });
+
+  it.each([false, true])("checks the saved references after a failed removal response (committed=%s)", async committed => {
+    const saved = conversation();
+    const manual = { kind: "knowledge" as const, knowledge_item_id: "manual", version: "1", locator: "第3页", label: "固定版说明书" };
+    const selected = { kind: "selection" as const, items: [manual] };
+    const draft = "使用说明书制作短片";
+    api.getCurrentAssistantConversation.mockResolvedValue(saved);
+    api.listAssistantConversations.mockResolvedValue({ items: [saved] });
+    api.referenceSaved.set(saved.id, {
+      selected_reference: selected, reference_version: 2, status: "ready", reason: null,
+    });
+    api.saveAssistantConversationReference.mockImplementationOnce(async () => {
+      if (committed) {
+        api.referenceSaved.set(saved.id, {
+          selected_reference: null, reference_version: 3, status: "ready", reason: null,
+        });
+      }
+      throw new Error("未收到保存结果");
+    });
+    render(<AssistantConversationProvider><AssistantConversationPanel state={state()} input={draft}
+      onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="工作区"/></AssistantConversationProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "移除引用：固定版说明书" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新核对引用" }));
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(api.getAssistantConversationReference).toHaveBeenCalledTimes(2);
+    expect(api.saveAssistantConversationReference).toHaveBeenCalledExactlyOnceWith(saved.id, null, 2);
+    const restored = screen.queryByRole("button", { name: "查看资料：固定版说明书" });
+    if (committed) expect(restored).not.toBeInTheDocument();
+    else expect(restored).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue(draft);
+  });
+
   it.each(["pending", "unavailable"] as const)("keeps four local commands available across button, Enter and menu with %s references", async referenceState => {
     api.getCurrentAssistantConversation.mockResolvedValue(conversation());
     api.listAssistantConversations.mockResolvedValue({items:[conversation()]});
