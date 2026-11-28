@@ -116,11 +116,16 @@ class SubtitleEditUseCase:
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
         command = verifier.bind_affected(command, montage, montage)
         prepare_changed_montage(montage, message='字幕已保存；生成成片后写入画面。')
-        return self.montage_edits.persist_montage_edit(
-            workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
-            updated_plan=montage, operation_type=command.operation_type, operation_payload=operation_payload,
-            edited_subtitle_tracks=[track], direct_command=command, direct_intent=intent,
-            direct_source_verifier=verifier, result_version_id=version_id)
+        try:
+            return self.montage_edits.persist_montage_edit(
+                workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
+                updated_plan=montage, operation_type=command.operation_type, operation_payload=operation_payload,
+                edited_subtitle_tracks=[track], direct_command=command, direct_intent=intent,
+                direct_source_verifier=verifier, result_version_id=version_id)
+        except EditConflict as exc:
+            if not isinstance(exc.__cause__, TimelineVersionConflict):
+                raise
+            raise first_subtitle_rejected(409, '时间线已变化，请重新读取当前作品') from exc
 
     def prepare_preview(self, command: EditCommand) -> PreparedSubtitleEdit:
         if not is_subtitle_edit(command.operation_type, command.values):

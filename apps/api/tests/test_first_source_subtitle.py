@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import json
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,7 @@ from app.artifact_store import ArtifactStore
 from app.auth import SupabaseAuthContext
 from app.config import Settings
 from app.conversation_repository import ConversationRepository
+from app.creation.editing.metadata_use_case import MetadataEditUseCase
 from test_source_task_use_case import source_case as source_case  # noqa: F401
 
 
@@ -54,7 +56,7 @@ def first_cue(version_id, sequence=1):
         'text': 'Original audio', 'start_seconds': .25, 'end_seconds': 1.25, 'language': 'en-US'}
 
 
-def test_first_cue_http_concurrent_save_replay_undo_redo_and_add_again(subtitle_http):
+def test_first_cue_http_concurrent_save_replay_undo_redo_and_add_again(subtitle_http, monkeypatch):
     case, client, store = subtitle_http
     created = create_source(case, client)
     task_id, starting_id = created['task_id'], created['timeline_version_id']
@@ -65,12 +67,26 @@ def test_first_cue_http_concurrent_save_replay_undo_redo_and_add_again(subtitle_
     assert original.snapshot['subtitle_track_ids'] == []
     command = first_cue(starting_id)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    persist = MetadataEditUseCase.persist_montage_edit
+    adoption_ready = Barrier(2, timeout=10)
+
+    def persist_after_both_validate(self, **kwargs):
+        adoption_ready.wait()
+        return persist(self, **kwargs)
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=2) as pool:
+        patch.setattr(MetadataEditUseCase, 'persist_montage_edit', persist_after_both_validate)
         success, competing = sorted(pool.map(lambda payload: client.post(base + '/edits/exact', json=payload),
             [command, {**command, 'request_id': str(uuid4()), 'text': 'Competing cue'}]),
             key=lambda response: response.status_code)
     assert success.status_code == 200, success.text
     assert competing.status_code == 409, competing.text
+    competing_detail = competing.json()['detail']
+    assert competing_detail['error'] == 'first_subtitle_rejected'
+    assert competing_detail['submission_effect'] == 'not_submitted'
+    competing_id = json.loads(competing.request.content)['request_id']
+    competing_receipt = client.get(f"{base}/assistant/edit-requests/{competing_id}?phase=apply")
+    assert competing_receipt.json()['result'] == {'detail': competing_detail}
     operation = success.json()['operation']
     assert operation['operation_type'] == 'AddFirstSubtitleCue'
     saved = versions.get_timeline_version('local', operation['result_version_id'])
