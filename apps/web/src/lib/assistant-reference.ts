@@ -1,7 +1,8 @@
 import type { MaterialAssistantSelection } from "./types";
-import type { AssistantReferenceItem, AssistantSavedReference, AssistantTimelineReference } from "./types/assistant";
+import type { AssistantReferenceItem, AssistantSavedReference, AssistantTimelineReference, AssistantTurnPdfReference } from "./types/assistant";
 
-export type SelectedAssistantReference = AssistantReferenceItem | AssistantTimelineReference;
+type NavigableAssistantReference = AssistantReferenceItem | AssistantTimelineReference;
+export type SelectedAssistantReference = NavigableAssistantReference | AssistantTurnPdfReference;
 export const ASSISTANT_SELECTION_EVENT = "yaohe:assistant-selection";
 export const ASSISTANT_LOCATE_REFERENCE_EVENT = "yaohe:assistant-locate-reference";
 export function assistantReferenceItems(value: AssistantSavedReference | null | undefined): SelectedAssistantReference[] {
@@ -11,15 +12,16 @@ export function assistantReferenceKey(value: SelectedAssistantReference): string
   if (value.kind === "material") return `material:${value.selection.asset_id}:${value.selection.scope === "segment" ? value.selection.segment_id : ""}`;
   if ("profile_id" in value) return `${value.kind}:${value.profile_id}`;
   if (value.kind === "knowledge") return `knowledge:${value.knowledge_item_id}:${value.locator ?? ""}`;
+  if (value.kind === "turn_pdf") return `turn_pdf:${value.attachment_id}`;
   return `${value.kind}:${value.task_id}:${value.object_id}`;
 }
 export function referenceAssistantSelection(items: SelectedAssistantReference[], additive = false) {
   window.dispatchEvent(new CustomEvent(ASSISTANT_SELECTION_EVENT, { detail: { items, additive } }));
 }
-export function locateAssistantReference(reference: SelectedAssistantReference) {
+export function locateAssistantReference(reference: NavigableAssistantReference) {
   window.dispatchEvent(new CustomEvent(ASSISTANT_LOCATE_REFERENCE_EVENT, { detail: reference, cancelable: true }));
 }
-export function assistantReferenceHref(reference: SelectedAssistantReference): string {
+export function assistantReferenceHref(reference: NavigableAssistantReference): string {
   const base = reference.kind === "material" ? "/library"
     : reference.kind === "knowledge" ? "/knowledge"
       : "profile_id" in reference ? `/profiles?view=${reference.kind === "voice" ? "voices" : "people"}`
@@ -27,14 +29,14 @@ export function assistantReferenceHref(reference: SelectedAssistantReference): s
   return `${base}${base.includes("?") ? "&" : "?"}locate_ref=${encodeURIComponent(JSON.stringify(reference))}`;
 }
 /** A navigation hint only. Consumers must read and authorize the actual object. */
-export function readAssistantLocateReference(search: {get:(key:string)=>string|null}): SelectedAssistantReference | null {
+export function readAssistantLocateReference(search: {get:(key:string)=>string|null}): NavigableAssistantReference | null {
   const raw = search.get("locate_ref");
   if (!raw) return null;
   const value = JSON.parse(raw);
   if (!value || typeof value !== "object" || typeof value.label !== "string"
       || !["material","knowledge","person","voice","shot","narration","audio","subtitle","effect"].includes(value.kind)) throw new Error("引用定位格式不可用。");
   assistantReferenceKey(value);
-  return value as SelectedAssistantReference;
+  return value as NavigableAssistantReference;
 }
 
 export type AssistantMaterialReference = { selection: MaterialAssistantSelection; label: string };

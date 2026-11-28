@@ -29,6 +29,14 @@ class HomePlanTurnHTTPAdapter:
         self.home_plan_for = home_plan_for
         self.run_plan_turn_for = run_plan_turn_for
 
+    def _planning_references(self, request, conversation_id, turn_id, turn):
+        references = self.task_turn_http_adapter_for()().frozen_references(request, conversation_id, turn_id)
+        evidence = turn.get('turn_pdf_evidence')
+        if not evidence:
+            return references
+        return [evidence if ref['kind'] == 'turn_pdf' and ref['attachment_id'] == evidence['attachment_id']
+                else ref for ref in references]
+
     def execute(self, request: Request, payload: WorkspaceAssistantPlanTurnRequest, on_event, *, material_selection: dict | None=None) -> WorkspaceAssistantPlanTurnResponse:
         workspace_id = self.current_workspace_id_for()(request)
         workspace_settings_for_turn = self.workspace_settings_for_for()(workspace_id)
@@ -52,9 +60,9 @@ class HomePlanTurnHTTPAdapter:
             while True:
                 try:
                     if isinstance(stage, self.home_plan_for().RunPlanning):
-                        answer = self.run_plan_turn_for()(workspace_settings_for_turn, workspace_id=workspace_id, local_member_token=self.local_member_token_for()(request) or None, caller_user_id=caller_user_id if not local_diagnostic else None, conversation_id=str(payload.conversation_id), message=payload.message.strip(), authorization=request.headers.get('authorization'), cookie=request.headers.get('cookie'), on_event=on_event, turn_id=turn_id, selected_references=self.task_turn_http_adapter_for()().frozen_references(request, str(payload.conversation_id), turn_id), input_handler=self.task_turn_http_adapter_for()().input_delivery(request, str(payload.conversation_id), turn_id), profile_reference=profile_reference, knowledge_reference=knowledge_reference, keep_turn_control=True, material_selection=material_selection)
+                        answer = self.run_plan_turn_for()(workspace_settings_for_turn, workspace_id=workspace_id, local_member_token=self.local_member_token_for()(request) or None, caller_user_id=caller_user_id if not local_diagnostic else None, conversation_id=str(payload.conversation_id), message=payload.message.strip(), authorization=request.headers.get('authorization'), cookie=request.headers.get('cookie'), on_event=on_event, turn_id=turn_id, selected_references=self._planning_references(request, str(payload.conversation_id), turn_id, turn), input_handler=self.task_turn_http_adapter_for()().input_delivery(request, str(payload.conversation_id), turn_id), profile_reference=profile_reference, knowledge_reference=knowledge_reference, keep_turn_control=True, material_selection=material_selection)
                     elif isinstance(stage, self.home_plan_for().ContinuePlanning):
-                        answer = self.run_plan_turn_for()(workspace_settings_for_turn, workspace_id=workspace_id, local_member_token=self.local_member_token_for()(request) or None, caller_user_id=caller_user_id if not local_diagnostic else None, conversation_id=str(payload.conversation_id), message=payload.message.strip(), authorization=request.headers.get('authorization'), cookie=request.headers.get('cookie'), on_event=on_event, turn_id=turn_id, profile_reference=profile_reference, selected_references=self.task_turn_http_adapter_for()().frozen_references(request, str(payload.conversation_id), turn_id), input_handler=self.task_turn_http_adapter_for()().input_delivery(request, str(payload.conversation_id), turn_id), knowledge_reference=knowledge_reference, creation_request=self.creation_request_response_for()(stage.latest_request).model_dump(mode='json'), keep_turn_control=True, material_selection=material_selection)
+                        answer = self.run_plan_turn_for()(workspace_settings_for_turn, workspace_id=workspace_id, local_member_token=self.local_member_token_for()(request) or None, caller_user_id=caller_user_id if not local_diagnostic else None, conversation_id=str(payload.conversation_id), message=payload.message.strip(), authorization=request.headers.get('authorization'), cookie=request.headers.get('cookie'), on_event=on_event, turn_id=turn_id, profile_reference=profile_reference, selected_references=self._planning_references(request, str(payload.conversation_id), turn_id, turn), input_handler=self.task_turn_http_adapter_for()().input_delivery(request, str(payload.conversation_id), turn_id), knowledge_reference=knowledge_reference, creation_request=self.creation_request_response_for()(stage.latest_request).model_dump(mode='json'), keep_turn_control=True, material_selection=material_selection)
                     elif isinstance(stage, self.home_plan_for().ReadOwnedRequest):
                         answer = self.creation_request_or_404_for()(request, stage.request_id)
                     elif isinstance(stage, self.home_plan_for().SafeFailureText):

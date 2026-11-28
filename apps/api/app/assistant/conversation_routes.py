@@ -7,7 +7,14 @@ from __future__ import annotations
 
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 from app.assistant.inputs import AssistantInputConflict
+from app.assistant.turn_pdf import (
+    MAX_PDF_BASE64, TurnPdfError, TurnPdfStore, TurnPdfUpload,
+    pdf_reference, reference_items, without_pdf,
+)
 from app.conversation_repository import (
     ConversationDraftVersionConflict, ConversationReferenceVersionConflict,
     ConversationTurnRequestConflict,
@@ -29,6 +36,7 @@ from app.schemas import (
 )
 from app.assistant.trace import project_turn_trace, project_usage_ledger, safe_runtime_trace_events
 from app.assistant.projection import public_history_turn
+from app.knowledge_files import KnowledgeFileError
 
 
 class ConversationHTTPAdapter:
@@ -96,6 +104,11 @@ class ConversationHTTPAdapter:
             if self._clean_text_factory is not None else
             lambda value: self._clean_text(value, row['workspace_id']))
         turns = [public_history_turn(turn, redact) for turn in turns]
+        if turns:
+            sources = self._conversations_for().turn_pdf_sources(row['id'], row['workspace_id'], row['member_id'])
+            for turn in turns:
+                if source := sources.get(turn['id']):
+                    turn['turn_pdf'] = {**source, 'label': redact(source['label'])}
         return {**row, 'turns': turns}
 
     def current(self, request: Request, payload: AssistantConversationCurrentRequest):
@@ -180,7 +193,12 @@ class ConversationHTTPAdapter:
         reference = row['selected_reference']
         reason = None
         try:
-            self._validate_reference(request, reference)
+            self._validate_reference(request, without_pdf(reference))
+            if attachment := pdf_reference(reference):
+                TurnPdfStore(self._conversations_for().database_path).read(
+                    row['workspace_id'], row['member_id'], row['id'], attachment)
+        except TurnPdfError as exc:
+            reason = str(exc)
         except HTTPException as exc:
             if exc.status_code not in (404, 409):
                 raise
@@ -193,12 +211,58 @@ class ConversationHTTPAdapter:
 
     def save_reference(self, conversation_id: str, request: Request, payload: AssistantConversationReferenceRequest):
         workspace_id, member_id, _row = self._owned_conversation(request, conversation_id)
-        reference = self._validate_reference(request, payload.selected_reference.model_dump(mode='json', exclude_none=True) if payload.selected_reference else None)
+        reference = payload.selected_reference.model_dump(mode='json', exclude_none=True) if payload.selected_reference else None
+        if attachment := pdf_reference(reference):
+            if sum(item['kind'] == attachment['kind'] for item in reference_items(reference)) != 1:
+                raise HTTPException(409, '每轮只支持一份本地 PDF。')
+            others = self._validate_reference(request, without_pdf(reference))
+            reference = {'kind': 'selection', 'items': [*reference_items(others), attachment]}
+        else:
+            reference = self._validate_reference(request, reference)
         try:
             saved = self._conversations_for().save_reference(conversation_id, workspace_id, member_id, reference, payload.expected_reference_version)
         except ConversationReferenceVersionConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return self.reference_response(request, saved)
+
+    def attach_pdf(self, conversation_id: str, request: Request, payload: TurnPdfUpload):
+        workspace_id, member_id, row = self._owned_conversation(request, conversation_id)
+        repository = self._conversations_for()
+        if row['scope_kind'] != 'home':
+            raise HTTPException(409, '本地 PDF 只能添加到新创作对话的第一轮。')
+        if row['reference_version'] != payload.expected_reference_version:
+            raise HTTPException(409, '引用已变化，请重新读取后再添加附件。')
+        store = TurnPdfStore(repository.database_path)
+        try:
+            attachment, data, text = store.prepare(payload)
+            if self._clean_text(text, workspace_id) != text or self._clean_text(payload.filename, workspace_id) != payload.filename:
+                raise HTTPException(422, 'PDF 名称或正文包含密钥或口令，请处理后重新选择。')
+            saved = repository.save_reference(conversation_id, workspace_id, member_id, None,
+                payload.expected_reference_version, new_turn_pdf=(attachment, data))
+        except KnowledgeFileError as exc:
+            raise HTTPException(422, self._clean_text(str(exc), workspace_id)) from exc
+        except TurnPdfError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        except ConversationReferenceVersionConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if saved is None:
+            raise HTTPException(404, '对话不存在或当前成员无权访问。')
+        return self.reference_response(request, saved)
+
+    def preview_pdf(self, conversation_id: str, attachment_id: str, turn_id: UUID | None, request: Request):
+        workspace_id, member_id, row = self._owned_conversation(request, conversation_id)
+        repository = self._conversations_for()
+        attachment = (repository.turn_pdf_sources(conversation_id, workspace_id, member_id).get(str(turn_id))
+                      if turn_id else pdf_reference(row['selected_reference']))
+        if not attachment or attachment["attachment_id"] != attachment_id:
+            raise HTTPException(404, '当前草稿或轮次没有这份附件。')
+        try:
+            pages = TurnPdfStore(repository.database_path).pages(workspace_id, member_id, conversation_id, attachment)
+        except TurnPdfError as exc:
+            raise HTTPException(exc.status_code, str(exc)) from exc
+        return JSONResponse({'pages': [
+            {**page, 'text': self._clean_text(page['text'], workspace_id)} for page in pages
+        ]}, headers={'Cache-Control': 'no-store'})
 
     def update(self, conversation_id: str, request: Request, payload: AssistantConversationUpdateRequest):
         workspace_id, member_id, _row = self._owned_conversation(request, conversation_id)
@@ -253,6 +317,11 @@ class ConversationHTTPAdapter:
         else:
             if conversation['reference_version'] != payload.expected_reference_version:
                 raise HTTPException(status_code=409, detail='选中引用已变化，请重新读取后发送。')
+            if pdf_reference(conversation['selected_reference']) or (
+                self._conversations_for().turn_pdf_sources(conversation_id, workspace_id, member_id)
+                .get(str(payload.target_turn_id))
+            ):
+                raise HTTPException(409, '含本地 PDF 的首轮结束后，请另发一轮补充要求。草稿已保留。')
             reference = self._validate_reference(request, conversation['selected_reference'])
             context = self._input_context(request, context, reference)
             context['expected_reference_version'] = payload.expected_reference_version
@@ -315,6 +384,23 @@ def build_conversation_router(adapter_for):
     @router.patch('/api/assistant/conversations/{conversation_id}/reference', response_model=AssistantConversationReferenceResponse)
     def save_assistant_conversation_reference(conversation_id: str, request: Request, payload: AssistantConversationReferenceRequest):
         return adapter_for().save_reference(conversation_id, request, payload)
+
+    @router.post('/api/assistant/conversations/{conversation_id}/turn-pdf', response_model=AssistantConversationReferenceResponse)
+    async def attach_turn_pdf(conversation_id: str, request: Request):
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_PDF_BASE64 + 4096:
+                raise HTTPException(413, '本轮 PDF 不能超过 2 MiB。')
+            body.extend(chunk)
+        try:
+            payload = TurnPdfUpload.model_validate_json(body)
+        except ValidationError:
+            raise HTTPException(422, '请选择不超过 2 MiB 的 PDF 并重新添加。') from None
+        return await run_in_threadpool(adapter_for().attach_pdf, conversation_id, request, payload)
+
+    @router.get('/api/assistant/conversations/{conversation_id}/turn-pdf/{attachment_id}')
+    def preview_turn_pdf(conversation_id: str, attachment_id: str, request: Request, turn_id: UUID | None = None):
+        return adapter_for().preview_pdf(conversation_id, attachment_id, turn_id, request)
 
     @router.patch('/api/assistant/conversations/{conversation_id}', response_model=AssistantConversationResponse)
     def update_assistant_conversation(conversation_id: str, request: Request, payload: AssistantConversationUpdateRequest):

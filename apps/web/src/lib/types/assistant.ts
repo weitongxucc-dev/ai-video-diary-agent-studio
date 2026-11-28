@@ -245,6 +245,7 @@ export type AssistantConversationTurn = {
     status: "running" | "completed" | "failed" | "stopped";
     events: AssistantTurnActivity["events"];
     result: Record<string, unknown> | null;
+    turn_pdf?: AssistantTurnPdfReference | null;
     created_at: string;
     updated_at: string;
 };
@@ -332,9 +333,16 @@ export type AssistantTimelineReference = {
     start_ms?: number;
     end_ms?: number;
 };
-export type AssistantSavedReference = AssistantReferenceItem | AssistantTimelineReference | {
+export type AssistantTurnPdfReference = {
+    kind: "turn_pdf";
+    attachment_id: string;
+    label: string;
+    size_bytes: number;
+    page_count: number;
+};
+export type AssistantSavedReference = AssistantReferenceItem | AssistantTimelineReference | AssistantTurnPdfReference | {
     kind: "selection";
-    items: (AssistantReferenceItem | AssistantTimelineReference)[];
+    items: (AssistantReferenceItem | AssistantTimelineReference | AssistantTurnPdfReference)[];
 };
 export type AssistantConversationReferenceState = {
     selected_reference: AssistantSavedReference | null;

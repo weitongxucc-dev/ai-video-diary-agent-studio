@@ -64,6 +64,140 @@ def envelope(text):
     return json.loads(text.split("本轮能力与对象（JSON）：\n", 1)[1].splitlines()[0])
 
 
+def test_first_turn_pdf_uses_owned_draft_and_original_request(captured_runtime, monkeypatch, tmp_path):
+    import base64
+    import hashlib
+    from uuid import uuid4
+
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    from app.conversation_repository import ConversationRepository
+    from app.local_members import LocalMemberService
+    from app.source_repository import SourceRepository
+    from tests.pdf_fixture import _text_pdf
+
+    _, calls = captured_runtime
+    database = tmp_path / "assistant.sqlite3"
+    repo = ConversationRepository(database)
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    owner, token = members.join(members.create_invite_code(), "PDF QA")
+    members.set_role(owner.member_id, "owner")
+    _, foreign_token = members.join(members.create_invite_code(), "Other QA")
+    monkeypatch.setattr(main, "conversation_repo", repo)
+    monkeypatch.setattr(main, "local_members_service", members)
+    monkeypatch.setattr(main, "source_repository", SourceRepository(tmp_path / "sources.sqlite3"))
+    monkeypatch.setattr(main, "current_workspace_id", lambda request: request.headers.get("X-Test-Workspace", "workspace-qa"))
+    client = TestClient(main.app, headers={"X-Local-Member-Token": token})
+
+    conversations = "/api/assistant/conversations"
+    scope = {"scope_kind": "home", "scope_id": f"draft:{uuid4()}"}
+    draft = client.post(f"{conversations}/current", json=scope).json()
+    second = client.post(conversations, json=scope).json()
+    path = f"{conversations}/{draft['id']}"
+    other = f"{conversations}/{second['id']}"
+    assert client.post(f"{path}/resume").status_code == 200
+    message = "根据第2页准备型号简介。"
+    saved = client.patch(path, json={"draft_text": message, "expected_draft_version": draft["draft_version"]}).json()
+    pdf = _text_pdf(["ZX-401 comparison", "ZX-410 isolated proof"])
+    attachment_id = hashlib.sha256(pdf).hexdigest()
+
+    def upload(data, version, filename="QA-manual.pdf"):
+        return client.post(f"{path}/turn-pdf", json={
+            "filename": filename, "content_base64": base64.b64encode(data).decode(),
+            "expected_reference_version": version,
+        })
+
+    assert upload(b"invalid", 0).status_code == 422
+    secret = "synthetic-secret-qa-value"
+    refused = upload(_text_pdf([f"token: {secret}"]), 0)
+    assert refused.status_code == 422 and secret not in refused.text
+    assert not (tmp_path / "originals").exists()
+    attached = upload(pdf, 0)
+    assert attached.status_code == 200, attached.text
+    selection = attached.json()["selected_reference"]
+    source, = selection["items"]
+    assert source["attachment_id"] == attachment_id and source["page_count"] == 2
+    assert upload(pdf, 0).status_code == 409
+    assert client.get("/api/source-items").json()["items"] == []
+    assert client.get("/api/knowledge-items").json()["items"] == []
+
+    pdf_path = f"{path}/turn-pdf/{attachment_id}"
+    assert TestClient(main.app).get(pdf_path).status_code == 403
+    assert client.get(pdf_path, headers={"X-Local-Member-Token": foreign_token}).status_code == 404
+    assert client.get(pdf_path, headers={"X-Test-Workspace": "workspace-other"}).status_code == 404
+    assert client.get(f"{other}/turn-pdf/{attachment_id}").status_code == 404
+    forged = client.patch(f"{other}/reference", json={
+        "selected_reference": selection, "expected_reference_version": 0,
+    })
+    assert forged.status_code == 409
+
+    library_source = client.post("/api/source-items/file", json={
+        "filename": "Approved-notes.md",
+        "content_base64": base64.b64encode(b"Approved library notes.").decode(),
+    }).json()
+    knowledge = client.post(f"/api/source-items/{library_source['id']}/save-to-knowledge", json={}).json()
+    fixed = {"kind": "knowledge", "label": "Approved library notes",
+             "knowledge_item_id": knowledge["id"], "version": knowledge["version"], "locator": "第1段"}
+    both = client.patch(f"{path}/reference", json={
+        "selected_reference": {"kind": "selection", "items": [fixed, source]},
+        "expected_reference_version": attached.json()["reference_version"],
+    })
+    assert both.status_code == 200, both.text
+    selection = both.json()["selected_reference"]
+    reference_version = both.json()["reference_version"]
+
+    monkeypatch.setattr(main, "conversation_repo", ConversationRepository(database))
+    reopened = client.post(f"{conversations}/current", json=scope).json()
+    assert reopened["draft_text"] == message and reopened["selected_reference"] == selection
+    assert client.get(pdf_path).json()["pages"] == [
+        {"locator": "第1页", "text": "ZX-401 comparison"},
+        {"locator": "第2页", "text": "ZX-410 isolated proof"},
+    ]
+    request = {"conversation_id": draft["id"], "message": message,
+               "client_request_id": str(uuid4()), "expected_draft_version": saved["draft_version"],
+               "expected_reference_version": reference_version}
+    original = next((tmp_path / "originals").rglob(attachment_id))
+    original.write_bytes(b"!" * len(pdf))
+    assert client.post("/api/assistant/plan/turn", json=request).status_code == 409
+    assert not calls and client.get(path).json()["draft_text"] == message
+    assert client.get(f"{path}/requests/{request['client_request_id']}").status_code == 404
+    original.write_bytes(pdf)
+
+    sent = client.post("/api/assistant/plan/turn", json=request)
+    assert sent.status_code == 200, sent.text
+    turn_id = sent.json()["turn_id"]
+    call, = calls
+    invocation = json.loads(call["message"])
+    assert "ZX-410 isolated proof" in invocation["systemPrompt"] and "第2页" in invocation["systemPrompt"]
+    assert "ZX-410 isolated proof" not in invocation["message"]
+    assert "turn_pdf" not in call["env"]["AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES"]
+    assert not any("ZX-410 isolated proof" in str(value) for value in call["env"].values())
+    receipt = client.get(f"{path}/requests/{request['client_request_id']}").json()
+    assert receipt["turn_id"] == turn_id and receipt["request_context"]["selected_reference"] == selection
+    assert "ZX-410 isolated proof" not in json.dumps(receipt)
+    history = client.get(path).json()
+    assert history["draft_text"] == ""
+    assert history["selected_reference"] == {"kind": "selection", "items": [fixed]}
+    assert history["reference_version"] == reference_version + 1
+    assert history["turns"][0]["turn_pdf"] == source
+    assert client.get(pdf_path).status_code == 404
+    assert client.get(pdf_path, params={"turn_id": turn_id}).json()["pages"][1]["locator"] == "第2页"
+    assert client.post("/api/assistant/plan/turn", json=request).json()["turn_id"] == turn_id
+    assert len(calls) == 1
+    assert upload(pdf, history["reference_version"]).status_code == 409
+
+    next_message = "另写一句开场。"
+    next_draft = client.patch(path, json={"draft_text": next_message,
+        "expected_draft_version": history["draft_version"]}).json()
+    next_turn = client.post("/api/assistant/plan/turn", json={**request, "message": next_message,
+        "client_request_id": str(uuid4()), "expected_draft_version": next_draft["draft_version"],
+        "expected_reference_version": history["reference_version"]})
+    assert next_turn.status_code == 200
+    assert "ZX-410 isolated proof" not in json.loads(calls[1]["message"])["systemPrompt"]
+    assert client.get(path).json()["turns"][1]["turn_pdf"] is None
+
+
 def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objects(captured_runtime):
     settings, calls = captured_runtime
     common = {"workspace_id": "workspace-current", "conversation_id": "conversation-current", "caller_user_id": "member-current"}

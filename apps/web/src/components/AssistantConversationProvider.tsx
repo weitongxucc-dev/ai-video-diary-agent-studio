@@ -11,11 +11,12 @@ import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
 import { ASSISTANT_SELECTION_EVENT, assistantReferenceItems, assistantReferenceKey, type SelectedAssistantReference, ASSISTANT_MATERIAL_REFERENCE_EVENT, ASSISTANT_PROFILE_REFERENCE_EVENT, ASSISTANT_KNOWLEDGE_REFERENCE_EVENT, type AssistantKnowledgeReference, type AssistantMaterialReference, type AssistantProfileReference } from "@/lib/assistant-reference";
 
 import { getAssistantConversationReference, saveAssistantConversationReference } from "@/lib/api";
+import { attachAssistantTurnPdf } from "@/lib/api/assistant";
 import { preflightReturnUrl, validDraftId } from "@/lib/preflight-draft";
 import type { AssistantConversationScope, AssistantSavedReference } from "@/lib/types";
 
 const draftScopePrefix = "draft:";
-const ReferenceStatusContext = createContext<{pending:boolean;reason:string|null;cancel?:()=>void;readAgain?:()=>void}>({pending:false,reason:null});
+const ReferenceStatusContext = createContext<{pending:boolean;reason:string|null;pdfUploading?:boolean;cancel?:()=>void;readAgain?:()=>void}>({pending:false,reason:null});
 export function useAssistantReferenceStatus() { return useContext(ReferenceStatusContext); }
 
 const MaterialReferenceContext = createContext<{ reference: AssistantMaterialReference | null; setReference: (value: AssistantMaterialReference | null) => void } | null>(null);
@@ -27,7 +28,7 @@ export function useAssistantProfileReference() { return useContext(ProfileRefere
 const KnowledgeReferenceContext = createContext<{reference:AssistantKnowledgeReference|null;setReference:(value:AssistantKnowledgeReference|null)=>void}|null>(null);
 export function useAssistantKnowledgeReference() { return useContext(KnowledgeReferenceContext); }
 
-const SelectionContext = createContext<{items:SelectedAssistantReference[];version:number|undefined;select:(items:SelectedAssistantReference[],additive?:boolean)=>void;remove:(item:SelectedAssistantReference)=>void}|null>(null);
+const SelectionContext = createContext<{items:SelectedAssistantReference[];version:number|undefined;select:(items:SelectedAssistantReference[],additive?:boolean)=>void;remove:(item:SelectedAssistantReference)=>void;attachPdf?:(file:File)=>Promise<void>}|null>(null);
 export function useAssistantSelection() { return useContext(SelectionContext); }
 
 type ReferenceSelection = {
@@ -43,7 +44,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
   const { targetId, draftId } = useWorkbenchTarget();
   useEffect(() => {
     const locate = (event: Event) => {
-      const item = (event as CustomEvent<SelectedAssistantReference>).detail;
+      const item = (event as CustomEvent<Parameters<typeof assistantReferenceHref>[0]>).detail;
       // Give the mounted workbench a chance to handle an in-place location.
       queueMicrotask(() => {
         if (event.defaultPrevented) return;
@@ -89,23 +90,25 @@ function MemberConversation({ children }: { children: ReactNode }) {
   const explicitReferenceId = useRef<string|null>(null);
   if (activeId.current !== conversationId) explicitReferenceId.current=null;
   activeId.current = conversationId;
-  const readReferenceAgain = () => {
+  const readReferenceAgain = useCallback(() => {
     explicitReferenceId.current = null;
     setReferenceReadAttempt(attempt => attempt + 1);
-  };
+  }, []);
   const referenceRevision = useRef(0);
   const versions = useRef(new Map<string,number>());
   const queues = useRef(new Map<string, Promise<unknown>>());
+  const pdfUploads = useRef(new Set<string>());
   const pendingBeforeLoad = useRef<{scopeKey:string;value:AssistantSavedReference|null}|null>(null);
   const showReference = useCallback((conversationId: string | null, value: AssistantSavedReference | null,
     pending: boolean, reason: string | null = null) => {
     setSelection({conversationId, scopeKey, value, pending, reason});
   }, [scopeKey]);
   const selectReference = useCallback((value:AssistantSavedReference|null) => {
+    const id = activeId.current;
+    if (id && pdfUploads.current.has(id)) return;
     // Events can arrive in the same React batch (for example cross-page handoff).
     // The next selection must compose with the optimistic selection immediately.
     itemsRef.current=assistantReferenceItems(value);
-    const id = activeId.current;
     if (!id) {
       pendingBeforeLoad.current={scopeKey,value};
       showReference(null,value,true);
@@ -134,14 +137,47 @@ function MemberConversation({ children }: { children: ReactNode }) {
       }
     });
   }, [scopeKey, showReference]);
+  const attachPdf = useCallback(async (file: File) => {
+    const id = activeId.current;
+    const version = id ? versions.current.get(id) : undefined;
+    if (!id || version === undefined || reference.pending || pdfUploads.current.has(id)) {
+      throw new Error("引用正在恢复，请稍后添加附件。");
+    }
+    explicitReferenceId.current = id;
+    const revision = ++referenceRevision.current;
+    const previous = reference.value;
+    pdfUploads.current.add(id);
+    showReference(id, previous, true, reference.reason);
+    const operation = attachAssistantTurnPdf(id, file, version);
+    queues.current.set(id, operation);
+    try {
+      const result = await operation;
+      versions.current.set(id, result.reference_version);
+      if (activeId.current === id && referenceRevision.current === revision) {
+        showReference(id, result.selected_reference, false, result.reason);
+      }
+    } catch (cause) {
+      if (activeId.current === id && referenceRevision.current === revision) {
+        showReference(id, previous, false, reference.reason);
+        readReferenceAgain();
+      }
+      throw cause;
+    } finally {
+      pdfUploads.current.delete(id);
+    }
+  }, [readReferenceAgain, reference.pending, reference.reason, reference.value, showReference]);
+  const serverReferenceVersion = state.conversation?.reference_version;
+  const serverReference = useRef(state.conversation?.selected_reference);
+  serverReference.current = state.conversation?.selected_reference;
   useEffect(() => {
     const id = conversationId;
     // An explicit selection in this render epoch owns the state and performs its own authenticated read/save.
-    if (id && explicitReferenceId.current === id) return;
+    if (id && explicitReferenceId.current === id
+        && (serverReferenceVersion ?? 0) <= (versions.current.get(id) ?? 0)) return;
     const revision = ++referenceRevision.current;
     if (pendingBeforeLoad.current?.scopeKey !== scopeKey) pendingBeforeLoad.current = null;
     const pending = pendingBeforeLoad.current;
-    const value = pending ? pending.value : state.conversation?.selected_reference ?? null;
+    const value = pending ? pending.value : serverReference.current ?? null;
     showReference(id,value,Boolean(id) || Boolean(pending));
     if (!id) return;
     const operation = (queues.current.get(id) ?? Promise.resolve()).catch(() => undefined)
@@ -161,7 +197,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
         showReference(id,value,false,cause instanceof Error ? cause.message : "引用未能恢复，请重新查看或取消。");
       }
     });
-  }, [conversationId, referenceReadAttempt, scopeKey, selectReference, showReference]);
+  }, [conversationId, referenceReadAttempt, scopeKey, selectReference, serverReferenceVersion, showReference]);
   const selectItems = useCallback((next:SelectedAssistantReference[], additive = false) => {
     const unique = new Map((additive ? [...itemsRef.current,...next] : next).map(item=>[assistantReferenceKey(item),item]));
     const values = [...unique.values()];
@@ -208,8 +244,8 @@ function MemberConversation({ children }: { children: ReactNode }) {
     window.addEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
     return () => window.removeEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
   }, [selectMaterial]);
-  return <AssistantConversationContext.Provider value={{...state,resume}}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,cancel:()=>selectReference(null),readAgain:readReferenceAgain}}>
-    <SelectionContext.Provider value={{items,version:conversationId ? versions.current.get(conversationId) : undefined,select:selectItems,remove:removeItem}}><MaterialReferenceContext.Provider value={{reference:materialReference,setReference:selectMaterial}}>
+  return <AssistantConversationContext.Provider value={{...state,resume}}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,pdfUploading:!!conversationId && pdfUploads.current.has(conversationId),cancel:()=>selectReference(null),readAgain:readReferenceAgain}}>
+    <SelectionContext.Provider value={{items,version:conversationId ? versions.current.get(conversationId) : undefined,select:selectItems,remove:removeItem,attachPdf:scope.scope_kind === "home" && state.conversation?.turns.length === 0 ? attachPdf : undefined}}><MaterialReferenceContext.Provider value={{reference:materialReference,setReference:selectMaterial}}>
       <ProfileReferenceContext.Provider value={{reference:profileReference,setReference:selectProfile}}>
         <KnowledgeReferenceContext.Provider value={{reference:knowledgeReference,setReference:selectKnowledge}}>{children}</KnowledgeReferenceContext.Provider>
       </ProfileReferenceContext.Provider>

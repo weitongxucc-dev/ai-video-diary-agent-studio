@@ -17,6 +17,7 @@ from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioC
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
 from app.source_types import ContentUseState
 from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
+from app.assistant.turn_pdf import AssistantTurnPdfReference
 
 from app.models import (
     EpisodeIntakeMode,
@@ -2644,7 +2645,7 @@ class AssistantSavedTimelineReference(BaseModel):
 
 AssistantSavedReferenceItem = Annotated[
     AssistantSavedMaterialReference | AssistantSavedProfileReference
-    | AssistantSavedKnowledgeReference | AssistantSavedTimelineReference,
+    | AssistantSavedKnowledgeReference | AssistantSavedTimelineReference | AssistantTurnPdfReference,
     Field(discriminator="kind"),
 ]
 
@@ -2659,7 +2660,7 @@ class AssistantSavedSelectionReference(BaseModel):
 AssistantSavedReference = Annotated[
     AssistantSavedMaterialReference | AssistantSavedProfileReference
     | AssistantSavedKnowledgeReference | AssistantSavedTimelineReference
-    | AssistantSavedSelectionReference,
+    | AssistantSavedSelectionReference | AssistantTurnPdfReference,
     Field(discriminator="kind"),
 ]
 
@@ -2727,6 +2728,7 @@ class AssistantConversationTurnResponse(BaseModel):
     status: Literal["running", "completed", "failed", "stopped"]
     events: list[dict[str, object]]
     result: dict[str, object] | None = None
+    turn_pdf: AssistantTurnPdfReference | None = None
     created_at: datetime
     updated_at: datetime
 

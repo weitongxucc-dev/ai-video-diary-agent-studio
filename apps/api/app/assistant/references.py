@@ -25,6 +25,8 @@ def reference_identity(reference: dict) -> tuple:
         return kind, reference["profile_id"]
     if kind == "knowledge":
         return kind, reference["knowledge_item_id"], reference.get("locator")
+    if kind == "turn_pdf":
+        return kind, reference["attachment_id"]
     return kind, reference["task_id"], reference["object_id"]
 
 

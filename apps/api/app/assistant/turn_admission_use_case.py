@@ -12,6 +12,7 @@ import json
 from types import SimpleNamespace
 
 from app.assistant.references import AssistantReferenceConflict, timeline_object_refs
+from app.assistant.turn_pdf import TurnPdfError, TurnPdfStore, pdf_reference, without_pdf
 from app.conversation_repository import (
     ConversationDraftVersionConflict, ConversationReferenceVersionConflict,
     ConversationTurnAlreadyRunning, ConversationTurnObjectRefsUnverifiable, ConversationTurnRequestConflict,
@@ -154,6 +155,7 @@ class TurnAdmissionUseCase:
             raise TurnRejected(422, "请勿在对话中粘贴密钥或口令。")
         previous = self._conversations_for().request_context(
             str(client_request_id), conversation_id, workspace_id, member_id)
+        pdf_evidence = None
         if expected_reference_version is None:
             if any(request_context.get(key) for key in (
                     "selection", "profile_reference", "knowledge_reference", "selected_object_refs")):
@@ -164,7 +166,25 @@ class TurnAdmissionUseCase:
         else:
             if conversation["reference_version"] != expected_reference_version:
                 raise TurnRejected(409, "选中引用已变化，请重新读取后再发送。")
-            reference = yield ValidateReference(conversation["selected_reference"])
+            saved = conversation["selected_reference"]
+            other = without_pdf(saved)
+            reference = yield ValidateReference(other)
+            if attachment := pdf_reference(saved):
+                if scope_kind != "home" or request_context.get("kind") != "home":
+                    raise TurnRejected(409, "本地 PDF 只能随新创作对话的第一轮发送。")
+                if reference != other:
+                    raise TurnRejected(409, "选中引用已变化，请重新核对后再发送。")
+                try:
+                    pages = TurnPdfStore(self._conversations_for().database_path).pages(
+                        workspace_id, member_id, conversation_id, attachment)
+                except TurnPdfError as exc:
+                    raise TurnRejected(exc.status_code, str(exc)) from exc
+                text = "\n\n".join(page["text"] for page in pages)
+                if ((yield CleanText(text, workspace_id)) != text or
+                        (yield CleanText(attachment["label"], workspace_id)) != attachment["label"]):
+                    raise TurnRejected(422, "PDF 名称或正文包含密钥或口令，请处理后重新选择。")
+                pdf_evidence = {**attachment, "pages": pages}
+                reference = saved
         if expected_reference_version is not None:
             request_context = {**request_context, "selected_reference": reference,
                                "expected_reference_version": expected_reference_version}
@@ -215,7 +235,7 @@ class TurnAdmissionUseCase:
                             "draft_version": expected_draft_version + 1})
         if not created and turn["status"] != "running":
             yield EmitTurnEvent({"type": "turn_status", "turn_id": turn["id"], "turn_state": turn["status"]})
-        return turn["id"], created, turn
+        return turn["id"], created, {**turn, "turn_pdf_evidence": pdf_evidence} if created and pdf_evidence else turn
 
     def verify_original_request_access(self, client_request_id, conversation_id, workspace_id, member_id, authorize_replay):
         original_context = self._conversations_for().request_context(

@@ -9,6 +9,7 @@ import { TurnActivity, TurnToolActivity, hasPrivateExecutionText, publicExecutio
 import { ReferencePicker } from "./ui/reference-picker";
 import type { MaterialUsageContext } from "./ui/material-usage";
 import { ReferenceChips } from "./ui/reference-chips";
+import { TurnPdfPreview } from "./ui/turn-pdf-preview";
 
 import { Children, Fragment, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useAssistantReferenceStatus, useAssistantSelection } from "./AssistantConversationProvider";
@@ -435,7 +436,7 @@ function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputRecei
   </div>;
 }
 
-function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, onOpenResultStage, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [], goalReceipt }: { goalReceipt?: ReactNode; inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; latest?: boolean; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; onOpenResultStage?: OpenAssistantResult; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
+function TurnView({ latest = false, turn, conversationId, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, onOpenResultStage, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [], goalReceipt }: { goalReceipt?: ReactNode; conversationId?: string; inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; latest?: boolean; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; onOpenResultStage?: OpenAssistantResult; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
@@ -611,6 +612,9 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
   </>;
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
+    {turn.turn_pdf && conversationId ? <div className="assistant-reference-attached" aria-label="本轮资料出处">
+      <TurnPdfPreview attachment={turn.turn_pdf} conversationId={conversationId} turnId={turn.id}/>
+    </div> : null}
     {businessContinuation && turn.status !== "running" ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     {inputReceipts.length ? <div className="assistant-turn-inputs" aria-label="本轮补充要求">{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</div> : null}
     <TurnContent turn={turn} blocks={blocks} reading={reading} latest={latest} continuation={businessContinuation}
@@ -757,7 +761,8 @@ export function AssistantConversationPanel({
   }
   const pendingInputs = [...inputs.values()].filter(({ item }) => item.status === "accepted" || item.status === "consumed");
   const goalProgress = assistantConversationGoal(conversation);
-  const acceptsQueuedInput = currentRunning || Boolean(conversation?.scope_kind === "task" && goalProgress
+  const pdfTurnRunning = currentRunning && Boolean(turns.at(-1)?.turn_pdf || selection?.items.some(item => item.kind === "turn_pdf"));
+  const acceptsQueuedInput = (currentRunning && !pdfTurnRunning) || Boolean(conversation?.scope_kind === "task" && goalProgress
     && ["running","waiting_result","waiting_adoption","waiting_identity","waiting_unknown"].includes(goalProgress.goal.status));
   const historyContent = JSON.stringify(turns.map(turn => [turn.id, turn.status, turn.updated_at, turn.assistant_text,
     turn.events.length, assistantTaskTurnResult(turn)?.continuation, assistantTaskTurnResult(turn)?.response?.media_job?.status,
@@ -770,11 +775,12 @@ export function AssistantConversationPanel({
   const isLocalCommand = input.trim().startsWith("/");
   const commandDisabled = state.loading || !conversation || busy || currentRunning || composing;
   const sendLabel = acceptsQueuedInput && !isLocalCommand ? inputMode === "follow_up" ? "排入后续" : "追加要求" : busy && !isLocalCommand ? "正在处理" : "发送";
-  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || (acceptsQueuedInput && selection !== null && selection.version === undefined) || (busy && !acceptsQueuedInput)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || staleTimelineReference || !configured));
+  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || pdfTurnRunning || (acceptsQueuedInput && selection !== null && selection.version === undefined) || (busy && !acceptsQueuedInput)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || staleTimelineReference || !configured));
   const sendReason = state.loading || !conversation ? "正在恢复对话"
     : composing ? "中文组合输入中，请先完成输入"
     : !input.trim() ? "先填写对话要求"
       : !isLocalCommand && staleTimelineReference ? "引用来自较早的作品版本，请移除或重新引用"
+      : pdfTurnRunning ? "含本地 PDF 的首轮结束后，可另发要求"
       : acceptsQueuedInput ? "要求将持久保存，等待 Agent 处理；已提交动作不会追改"
         : busy ? "本轮正在处理，请稍后再发送"
           : isLocalCommand ? "Enter 执行本地会话操作；无效命令不会发送给模型"
@@ -886,7 +892,7 @@ export function AssistantConversationPanel({
     const text = (commandText ?? input).trim();
     if (!text || composing) return;
     const localCommand = text.startsWith("/");
-    if (state.loading || !conversation || sendingInput || (busy && !acceptsQueuedInput)) { setError(sendReason); return; }
+    if (state.loading || !conversation || sendingInput || pdfTurnRunning || (busy && !acceptsQueuedInput)) { setError(sendReason); return; }
     if (!localCommand && !configured) { setError(sendReason); return; }
     if (localCommand && (busy || currentRunning)) { setError(localCommand ? "本轮运行中，可继续编辑草稿；停止后再执行。" : sendReason); return; }
     if (localCommand) {
@@ -1003,7 +1009,7 @@ export function AssistantConversationPanel({
             </article>;
           })}
         </ReadingDetails>)}
-        {turns.map((turn) => <TurnView latest={turn.id === latestReplyId} key={`${conversation?.id}:${turn.id}`} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} onOpenResultStage={onOpenResultStage} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
+        {turns.map((turn) => <TurnView conversationId={conversationId} latest={turn.id === latestReplyId} key={`${conversation?.id}:${turn.id}`} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} onOpenResultStage={onOpenResultStage} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
           goalReceipt={goalProgress?.root.id === turn.id ? <GoalProgress value={goalProgress} reading={reading} refreshPaused={state.businessRefreshPaused}
             onRead={() => void readTurnResult(goalProgress.root)} readingResult={readingResultTurn === goalProgress.root.id}/> : null}
           productionRecovered={Boolean(goalProgress?.goal.status === "production_completed" && goalProgress.goal.production_result?.status === "succeeded" && goalProgress.goal.production_result.video_ready && goalProgress.turns.some(item => item.id === turn.id))}
@@ -1030,7 +1036,7 @@ export function AssistantConversationPanel({
     {staleTimelineReference ? <p className="assistant-stream-status" role="status">引用来自较早的作品版本。请移除或重新引用后发送。</p> : null}
     {pendingInputs.length ? <section className="assistant-pending-inputs" aria-label="待处理追加要求">{pendingInputs.map(({ item }) => <InputReceipt key={item.input_id} item={item} reading={reading} onWithdraw={id => void state.withdrawInput(id).catch(cause => setError(cause.message))}/>)}</section> : null}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">
-      {selection ? <ReferenceChips usage={materialUsage} items={selection.items} onRemove={item => { selection.remove(item); if (selection.items.length === 1) focus?.focus(); }}/> : null}
+      {selection ? <ReferenceChips conversationId={conversationId} usage={materialUsage} items={selection.items} removalDisabled={referenceStatus.pdfUploading} onRemove={item => { selection.remove(item); if (selection.items.length === 1) focus?.focus(); }}/> : null}
       {menuOpen ? <div className="assistant-slash-menu" role="listbox" aria-label="对话命令" id={`${diagnosticsId}-commands`} style={{ maxHeight: menuMaxHeight }}>
         {filteredCommands.length ? filteredCommands.map((item, index) => { const Icon = item.icon; return <Button variant="ghost" role="option" aria-selected={activeCommand === index} key={item.name} type="button" onPointerDown={event => event.preventDefault()} onClick={() => chooseCommand(index)} disabled={commandDisabled} aria-disabled={commandDisabled}>
           <Icon size={16}/><span><strong>{item.title}</strong><small>{item.description}</small></span><code>{item.syntax}</code>
@@ -1040,7 +1046,7 @@ export function AssistantConversationPanel({
       <InputGroupTextarea ref={setFocus} autoComplete="off" aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => { onInput(event.target.value); if (event.target.value.endsWith("@") && !composing) setReferencePickerOpen(true); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={acceptsQueuedInput ? "还有什么要补充？" : placeholder ?? "想做什么，或想怎么改？"} rows={1} />
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
-          <ReferencePicker open={referencePickerOpen} onOpenChange={setReferencePickerOpen} onAdded={()=>{if(input.endsWith("@"))onInput(input.slice(0,-1));focus?.focus();}}/>
+          <ReferencePicker key={conversationId} open={referencePickerOpen} onOpenChange={setReferencePickerOpen} onAdded={()=>{if(input.endsWith("@"))onInput(input.slice(0,-1));focus?.focus();}}/>
           {composerActions}
           {acceptsQueuedInput ? <label className="assistant-input-mode"><span className="assistant-visually-hidden">追加要求</span><select aria-label="追加要求处理方式" title="补充当前要求，或等本轮结束后再处理" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">补充当前要求</option><option value="follow_up">完成后处理</option></select></label> : null}
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}
